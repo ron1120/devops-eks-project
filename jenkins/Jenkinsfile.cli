@@ -1,0 +1,71 @@
+pipeline {
+  agent any
+
+  environment {
+    REGISTRY = "ghcr.io"
+    IMAGE_REPO = "ghcr.io/ron1120/seyoawe-cli"
+    BASE_VERSION = ""
+    IMAGE_TAG = ""
+  }
+
+  triggers {
+    githubPush()
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Resolve Version') {
+      steps {
+        script {
+          env.BASE_VERSION = sh(script: 'cat VERSION', returnStdout: true).trim()
+          env.IMAGE_TAG = "${env.BASE_VERSION}-${env.GIT_COMMIT.take(7)}"
+          echo "Resolved CLI image tag: ${env.IMAGE_TAG}"
+        }
+      }
+    }
+
+    stage('CLI Validation') {
+      steps {
+        sh '''
+          python3 -m venv .venv-ci
+          . .venv-ci/bin/activate
+          pip install --upgrade pip
+          pip install -r sawectl/requirements.txt
+          python sawectl/sawectl.py --help > /tmp/sawectl-help.txt
+          test -s /tmp/sawectl-help.txt
+        '''
+      }
+    }
+
+    stage('Build CLI Image') {
+      steps {
+        sh 'docker build -f docker/Dockerfile.cli -t ${IMAGE_REPO}:${IMAGE_TAG} .'
+      }
+    }
+
+    stage('Push Image') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'ghcr-creds', usernameVariable: 'REG_USER', passwordVariable: 'REG_TOKEN')]) {
+          sh '''
+            echo "$REG_TOKEN" | docker login ${REGISTRY} -u "$REG_USER" --password-stdin
+            docker push ${IMAGE_REPO}:${IMAGE_TAG}
+            docker tag ${IMAGE_REPO}:${IMAGE_TAG} ${IMAGE_REPO}:latest
+            docker push ${IMAGE_REPO}:latest
+            echo "Published CLI image ${IMAGE_REPO}:${IMAGE_TAG}"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo 'CLI pipeline failed. Image was not promoted.'
+    }
+  }
+}

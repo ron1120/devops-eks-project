@@ -1,0 +1,22 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY seyoawe.linux /app/seyoawe
+COPY configuration /app/configuration
+COPY modules /app/modules
+COPY workflows /app/workflows
+COPY seyoawe-community /app/seyoawe-community
+
+RUN chmod +x /app/seyoawe \
+    && mkdir -p /app/seyoawe-community/lifetimes /app/seyoawe-community/logs
+
+EXPOSE 8080 8081
+
+ENTRYPOINT ["/app/seyoawe"]

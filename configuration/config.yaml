@@ -4,8 +4,8 @@
     
   directories:
     workdir: ./seyoawe-community
-    modules: ./seyoawe-community/modules
-    workflows: ./seyoawe-community/workflows
+    modules: ./modules
+    workflows: ./workflows
     lifetimes: ./seyoawe-community/lifetimes
     logs: ./seyoawe-community/logs
 

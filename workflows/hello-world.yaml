@@ -1,0 +1,11 @@
+workflow:
+  name: hello-world
+  trigger:
+    type: api
+  steps:
+    - id: greet
+      type: action
+      action: command_module.Command.run
+      input:
+        command: "echo 'Hello from SeyoAWE!'"
+      register_output: greet_output
