@@ -1,0 +1,23 @@
+# Dockerfile for Engine tests
+
+FROM python:3.12-slim
+WORKDIR /engine-test
+COPY engine/ .
+RUN apt update && apt install -y curl git
+EXPOSE 5000
+RUN chmod +x run.sh
+RUN chmod +x seyoawe.linux
+RUN chmod +x seyoawe.macos.arm
+CMD ["./seyoawe.linux"]
+
+
+### Build engine_test locally:
+### docker build -f Dockerfile.engine_test -t engine-app ..
+## ARM BUILD:
+## docker build --platform linux/amd64 -f Dockerfile.engine_test -t engine-app ..
+
+
+### Run engine_test locally:
+### docker run -p 5000:5000 engine-app
+## ARM RUN:
+## docker run --platform linux/amd64 -p 5000:5000 engine-app 
