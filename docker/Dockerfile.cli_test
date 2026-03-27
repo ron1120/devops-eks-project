@@ -3,9 +3,17 @@
 
 
 FROM python:3.12-slim
-WORKDIR /cli-test
-COPY cli/ .
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /workspace
+
+# Copy exactly how the test expects the structure
+COPY cli/ cli/
+COPY tests/ tests/
+
+# Install the CLI requirements and pytest
+RUN pip install --no-cache-dir -r cli/requirements.txt pytest
+
+# Make the docker container run the test automatically
+CMD ["pytest", "tests/test_cli.py"]
 
 
 
@@ -16,3 +24,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 ### Build image using this dockerfile and main project directory:
 ### docker build -f Dockerfile.cli_test -t cli-test ..
+
+# Run test image:
+# docker run --rm cli-test
