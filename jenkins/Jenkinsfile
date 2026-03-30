@@ -1,0 +1,67 @@
+//=============================================
+// CI/CD Pipeline for engine
+//=============================================
+
+pipeline {
+    agent any
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timout(time: 1, unit: 'HOURS')
+    }
+
+
+    environment {
+        PYTHON_VERSION = '3.8'
+        AWS_REGION = 'us-east-1'
+        EKS_CLUSTER_NAME = 'eks-cluster'
+        JENKINS_MASTER_INSTANCE_ID = 'i-0123456789abcdef0' // Replace with your Jenkins Master EC2 instance ID
+        GIT_REPO = 'github.com/ron1120/devops-eks-project.git'
+        VENV_DIR = 'venv'
+    }
+
+    triggers {githubPush()}
+    stages {
+
+        // --- 1. Checkout code from GitHub ---
+        stage('Checkout') {
+            steps {
+                script {
+                    git branch: 'main', credentialsId: 'RonGitUser', url: env.GIT_REPO
+
+                    env.GIT_BRANCH_NAME = sh(
+                        script: 'git rev-parse --abbrev-ref HEAD || echo main',
+                        returnStdout: true
+                    ).trim()
+
+                    if (env.GIT_BRANCH_NAME == 'HEAD') { env.GIT_BRANCH_NAME = 'main' }
+                    echo "Branch: ${env.GIT_BRANCH_NAME}"
+                }
+            }
+        }
+
+        // --- 2. Setup Environment ---
+        stage('Setup Environment') {
+            steps {
+                script {
+                    // Create Python virtual environment
+                    sh "python${env.PYTHON_VERSION} -m venv ${env.VENV_DIR}"
+                    // Activate virtual environment and install dependencies
+                    sh """
+                        source ${env.VENV_DIR}/bin/activate
+                        pip install --upgrade pip
+                        pip install -r engine/requirements.txt
+                    """
+                }
+            }
+        }
+        // --- Always clean workspace ---
+        post {
+            always {
+                cleanWs()
+            }
+        } 
+
+
+    }
+}
