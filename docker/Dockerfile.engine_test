@@ -5,7 +5,7 @@ WORKDIR /workspace
 
 # Copy exactly how the test expects the structure
 COPY engine/ engine/
-COPY tests/ tests/
+COPY tests/engine/ tests/engine/
 
 # Install system dependencies and Python requirements
 RUN apt update && apt install -y curl git
