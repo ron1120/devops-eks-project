@@ -7,7 +7,7 @@ pipeline {
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        timout(time: 1, unit: 'HOURS')
+        timeout(time: 1, unit: 'HOURS')
     }
 
 
@@ -55,13 +55,13 @@ pipeline {
                 }
             }
         }
-        // --- Always clean workspace ---
-        post {
-            always {
-                cleanWs()
-            }
-        } 
 
+    } // End of stages block
 
-    }
+    // --- Always clean workspace ---
+    post {
+        always {
+            cleanWs()
+        }
+    } 
 }
