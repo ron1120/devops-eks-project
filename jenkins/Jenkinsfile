@@ -3,7 +3,12 @@
 //=============================================
 
 pipeline {
-    agent any
+    agent {
+        docker { 
+            image 'python:3.12-slim'
+            args '-u root:root'
+        }
+    }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
@@ -44,11 +49,11 @@ pipeline {
         stage('Setup Environment') {
             steps {
                 script {
-                    // Create Python virtual environment
-                    sh "python${env.PYTHON_VERSION} -m venv ${env.VENV_DIR}"
+                    // Setup virtual environment explicitly with python
+                    sh "python -m venv ${env.VENV_DIR}"
                     // Activate virtual environment and install dependencies
                     sh """
-                        source ${env.VENV_DIR}/bin/activate
+                        . ${env.VENV_DIR}/bin/activate
                         pip install --upgrade pip
                         pip install -r engine/requirements.txt
                     """
