@@ -16,7 +16,7 @@ pipeline {
         AWS_REGION = 'us-east-1'
         EKS_CLUSTER_NAME = 'eks-cluster'
         JENKINS_MASTER_INSTANCE_ID = 'i-0123456789abcdef0' // Replace with your Jenkins Master EC2 instance ID
-        GIT_REPO = 'github.com/ron1120/devops-eks-project.git'
+        GIT_REPO = 'https://github.com/ron1120/devops-eks-project.git'
         VENV_DIR = 'venv'
     }
 
