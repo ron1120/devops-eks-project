@@ -181,3 +181,6 @@ cython_debug/
 *.tfstate
 *.tfstate.backup
 *.tfplan
+*.terraform.lock.hcl
+*.tfvars
+*.tfvars.json

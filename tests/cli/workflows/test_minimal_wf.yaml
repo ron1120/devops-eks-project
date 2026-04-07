@@ -1,0 +1,19 @@
+
+        # =============================================
+        # SeyoAWE Full Workflow Example
+        # Generated via `sawectl init workflow --full`
+        # 
+        # 🔗 DSL Reference: https://seyoawe.dev/docs/dsl
+        # 🔗 Modules Reference: https://seyoawe.dev/docs/modules
+        # 
+        # Modify this file to suit your use case.
+        # =============================================
+        
+workflow:
+  name: test_minimal_wf
+  steps:
+  - id: step1
+    type: action
+    action: logger.run
+    input:
+      message: Hello, world!

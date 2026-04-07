@@ -9,20 +9,20 @@ COPY tests/engine/ tests/engine/
 
 # Install system dependencies and Python requirements
 RUN apt update && apt install -y curl git
-RUN pip install --no-cache-dir -r engine/requirements.txt pytest
-EXPOSE 5000
+RUN pip install --no-cache-dir -r engine/requirements.txt pytest pyyaml
 
 # Make scripts executable
 RUN chmod +x engine/run.sh engine/seyoawe.linux engine/seyoawe.macos.arm
 
-# Make the docker container run the test automatically
-CMD ["pytest", "tests/test_engine.py"]
+# Run both unit and integration tests
+CMD ["pytest", "tests/engine/", "-v"]
 
 
 ### Build engine_test locally:
 ### docker build -f Dockerfile.engine_test -t engine-app ..
 ## ARM BUILD:
-## docker build --platform linux/amd64 -f Dockerfile.engine_test -t engine-app ..
+## docker build --platform linux/als
+md64 -f Dockerfile.engine_test -t engine-app ..
 
 
 ### Run engine_test locally:

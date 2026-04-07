@@ -1,6 +1,7 @@
 import subprocess
 import os
 import sys
+import shutil
 
 # Base paths — go up from tests/cli/integration/ to the project root
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -70,3 +71,30 @@ class TestCLIInitWorkflow:
         """Test that the CLI can generate a minimal workflow."""
         result = run_cli("init", "workflow", "test_minimal_wf", "--minimal")
         assert result.returncode == 0
+
+
+class TestCLIInitModule:
+    """Integration tests: CLI scaffolds a new module on disk."""
+
+    def test_init_module_creates_files(self):
+        """Test that init module creates the expected skeleton files."""
+        module_name = "test_scaffold_module"
+        module_path = os.path.join(MODULES_DIR, module_name)
+
+        # Clean up if leftover from a previous run
+        if os.path.exists(module_path):
+            shutil.rmtree(module_path)
+
+        result = subprocess.run(
+            [sys.executable, CLI_SCRIPT, "init", "module", module_name],
+            capture_output=True, text=True,
+            cwd=BASE_DIR
+        )
+        assert result.returncode == 0
+        assert os.path.isdir(module_path)
+        assert os.path.isfile(os.path.join(module_path, "module.yaml"))
+        assert os.path.isfile(os.path.join(module_path, f"{module_name}.py"))
+        assert os.path.isfile(os.path.join(module_path, "usage_reference.yaml"))
+
+        # Clean up
+        shutil.rmtree(module_path)
