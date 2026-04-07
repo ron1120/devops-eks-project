@@ -1,0 +1,366 @@
+//=============================================
+// CI Pipeline — SeyoAWE CLI (sawectl)
+//=============================================
+// Stages: Checkout → Version → Detect Changes → Lint
+//       → Unit Tests → Integration Tests
+//       → Package Artifact → Docker Build → Push
+//=============================================
+
+pipeline {
+    agent any
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        // ---- Git ----
+        GIT_REPO        = 'https://github.com/ron1120/devops-eks-project.git'
+        GIT_CREDENTIALS = 'RonGitUser'
+
+        // ---- Docker Hub ----
+        DOCKERHUB_CREDENTIALS = 'DockerHubCredentials'
+        DOCKERHUB_REPO        = 'ron1120/seyoawe-cli'
+
+        // ---- Build ----
+        VENV_DIR = 'venv'
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+
+        // ================================================
+        // 1. Checkout
+        // ================================================
+        stage('Checkout') {
+            steps {
+                script {
+                    git branch: 'main',
+                        credentialsId: env.GIT_CREDENTIALS,
+                        url: env.GIT_REPO
+
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.GIT_BRANCH_NAME = sh(
+                        script: 'git rev-parse --abbrev-ref HEAD || echo main',
+                        returnStdout: true
+                    ).trim()
+                    if (env.GIT_BRANCH_NAME == 'HEAD') { env.GIT_BRANCH_NAME = 'main' }
+
+                    echo "Branch: ${env.GIT_BRANCH_NAME}  Commit: ${env.GIT_COMMIT_SHORT}"
+                }
+            }
+        }
+
+        // ================================================
+        // 2. Read Semantic Version
+        // ================================================
+        stage('Version') {
+            steps {
+                script {
+                    env.SEM_VERSION = sh(
+                        script: 'cat VERSION',
+                        returnStdout: true
+                    ).trim()
+
+                    env.BUILD_TAG = "${env.SEM_VERSION}-${env.BUILD_NUMBER}"
+                    env.IMAGE_TAG = "${env.SEM_VERSION}"
+                    env.ARTIFACT_NAME = "sawectl-${env.SEM_VERSION}"
+
+                    echo """
+                    =========================================
+                     Semantic Version : ${env.SEM_VERSION}
+                     Build Tag        : ${env.BUILD_TAG}
+                     Artifact Name    : ${env.ARTIFACT_NAME}
+                     Commit           : ${env.GIT_COMMIT_SHORT}
+                    =========================================
+                    """
+                }
+            }
+        }
+
+        // ================================================
+        // 3. Detect CLI Changes
+        // ================================================
+        stage('Detect Changes') {
+            steps {
+                script {
+                    def previousCommit = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: ''
+
+                    if (previousCommit) {
+                        def changes = sh(
+                            script: "git diff --name-only ${previousCommit} HEAD || true",
+                            returnStdout: true
+                        ).trim()
+
+                        echo "Changed files:\n${changes}"
+
+                        env.CLI_CHANGED = (
+                            changes.contains('cli/') ||
+                            changes.contains('engine/modules/') ||
+                            changes.contains('docker/Dockerfile.cli') ||
+                            changes.contains('VERSION')
+                        ) ? 'true' : 'false'
+                    } else {
+                        echo "No previous successful commit — full build"
+                        env.CLI_CHANGED = 'true'
+                    }
+
+                    echo "CLI changed: ${env.CLI_CHANGED}"
+
+                    if (env.CLI_CHANGED == 'false') {
+                        echo "No CLI-related changes detected. Skipping remaining stages."
+                    }
+                }
+            }
+        }
+
+        // ================================================
+        // 4. Setup Python Environment
+        // ================================================
+        stage('Setup Environment') {
+            when { environment name: 'CLI_CHANGED', value: 'true' }
+            steps {
+                sh """
+                    python3 -m venv ${env.VENV_DIR}
+                    . ${env.VENV_DIR}/bin/activate
+                    pip install --upgrade pip
+                    pip install -r cli/requirements.txt
+                    pip install pytest pylint
+                """
+            }
+        }
+
+        // ================================================
+        // 5. Lint
+        // ================================================
+        stage('Lint') {
+            when { environment name: 'CLI_CHANGED', value: 'true' }
+            steps {
+                echo "Linting CLI source..."
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    pylint cli/sawectl.py \
+                        --disable=C0114,C0115,C0116,C0103,C0301,R0903,W0613,W0622,E0401,C0411,W0612,R0801,W0611,R0914,R0912,R0915,W0102 \
+                        --fail-under=5.0 \
+                        --output-format=colorized || true
+                """
+            }
+        }
+
+        // ================================================
+        // 6. Unit Tests
+        // ================================================
+        stage('Unit Tests') {
+            when { environment name: 'CLI_CHANGED', value: 'true' }
+            steps {
+                echo "Running CLI unit tests (v${env.SEM_VERSION})..."
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    pytest tests/cli/unit/ -v --tb=short --junitxml=reports/cli-unit.xml
+                """
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'reports/cli-unit.xml'
+                }
+            }
+        }
+
+        // ================================================
+        // 7. Integration Tests
+        // ================================================
+        stage('Integration Tests') {
+            when { environment name: 'CLI_CHANGED', value: 'true' }
+            steps {
+                echo "Running CLI integration tests (v${env.SEM_VERSION})..."
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    pytest tests/cli/integration/ -v --tb=short --junitxml=reports/cli-integration.xml
+                """
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'reports/cli-integration.xml'
+                }
+            }
+        }
+
+        // ================================================
+        // 8. Package CLI Artifact
+        // ================================================
+        stage('Package Artifact') {
+            when { environment name: 'CLI_CHANGED', value: 'true' }
+            steps {
+                echo "Packaging CLI artifact: ${env.ARTIFACT_NAME}..."
+                sh """
+                    mkdir -p dist/${env.ARTIFACT_NAME}
+
+                    # Core CLI files
+                    cp cli/sawectl.py          dist/${env.ARTIFACT_NAME}/
+                    cp cli/dsl.schema.json     dist/${env.ARTIFACT_NAME}/
+                    cp cli/module.schema.json  dist/${env.ARTIFACT_NAME}/
+                    cp cli/requirements.txt    dist/${env.ARTIFACT_NAME}/
+                    cp VERSION                 dist/${env.ARTIFACT_NAME}/
+
+                    # Pre-built binaries
+                    mkdir -p dist/${env.ARTIFACT_NAME}/binaries
+                    cp -r cli/binaries/linux     dist/${env.ARTIFACT_NAME}/binaries/
+                    cp -r cli/binaries/macos.arm dist/${env.ARTIFACT_NAME}/binaries/
+
+                    # Create versioned tarball
+                    cd dist
+                    tar czf ${env.ARTIFACT_NAME}.tar.gz ${env.ARTIFACT_NAME}/
+                    sha256sum ${env.ARTIFACT_NAME}.tar.gz > ${env.ARTIFACT_NAME}.tar.gz.sha256
+                """
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: "dist/${env.ARTIFACT_NAME}.tar.gz, dist/${env.ARTIFACT_NAME}.tar.gz.sha256",
+                                     fingerprint: true
+                }
+            }
+        }
+
+        // ================================================
+        // 9. Docker Build
+        // ================================================
+        stage('Docker Build') {
+            when { environment name: 'CLI_CHANGED', value: 'true' }
+            steps {
+                echo "Building CLI production image v${env.SEM_VERSION}..."
+                sh """
+                    docker build \
+                        -f docker/Dockerfile.cli_prod \
+                        --build-arg VERSION=${env.SEM_VERSION} \
+                        -t ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} \
+                        -t ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} \
+                        -t ${env.DOCKERHUB_REPO}:latest \
+                        .
+                """
+            }
+        }
+
+        // ================================================
+        // 10. Push to Docker Hub
+        // ================================================
+        stage('Push to Docker Hub') {
+            when {
+                allOf {
+                    environment name: 'CLI_CHANGED', value: 'true'
+                    branch 'main'
+                }
+            }
+            steps {
+                echo "Pushing CLI image to Docker Hub..."
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: env.DOCKERHUB_CREDENTIALS,
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )
+                ]) {
+                    sh """
+                        echo "\${DOCKER_PASS}" | docker login -u "\${DOCKER_USER}" --password-stdin
+
+                        docker push ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG}
+                        docker push ${env.DOCKERHUB_REPO}:${env.BUILD_TAG}
+                        docker push ${env.DOCKERHUB_REPO}:latest
+
+                        docker logout
+                    """
+                }
+            }
+        }
+
+        // ================================================
+        // 11. Git Tag Release
+        // ================================================
+        stage('Tag Release') {
+            when {
+                allOf {
+                    environment name: 'CLI_CHANGED', value: 'true'
+                    branch 'main'
+                }
+            }
+            steps {
+                echo "Tagging release cli-v${env.SEM_VERSION}..."
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: env.GIT_CREDENTIALS,
+                        usernameVariable: 'GIT_USER',
+                        passwordVariable: 'GIT_TOKEN'
+                    )
+                ]) {
+                    sh """
+                        git config user.email "jenkins@seyoawe.io"
+                        git config user.name "Jenkins CI"
+
+                        # Only tag if it doesn't already exist
+                        if ! git rev-parse "cli-v${env.SEM_VERSION}" >/dev/null 2>&1; then
+                            git tag -a "cli-v${env.SEM_VERSION}" \
+                                -m "CLI release v${env.SEM_VERSION} (build #${env.BUILD_NUMBER})"
+                            git push https://\${GIT_USER}:\${GIT_TOKEN}@github.com/ron1120/devops-eks-project.git \
+                                "cli-v${env.SEM_VERSION}"
+                            echo "Tagged: cli-v${env.SEM_VERSION}"
+                        else
+                            echo "Tag cli-v${env.SEM_VERSION} already exists — skipping"
+                        fi
+                    """
+                }
+            }
+        }
+
+        // ================================================
+        // 12. Cleanup
+        // ================================================
+        stage('Cleanup') {
+            when { environment name: 'CLI_CHANGED', value: 'true' }
+            steps {
+                echo "Removing local Docker images..."
+                sh """
+                    docker rmi ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} || true
+                    docker rmi ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} || true
+                    docker rmi ${env.DOCKERHUB_REPO}:latest || true
+                """
+            }
+        }
+
+    } // end stages
+
+    post {
+        always {
+            script {
+                echo """
+                =============================================
+                 CLI CI Pipeline — Summary
+                =============================================
+                 Version     : ${env.SEM_VERSION ?: 'N/A'}
+                 Build       : ${env.BUILD_TAG ?: 'N/A'}
+                 Artifact    : ${env.ARTIFACT_NAME ?: 'N/A'}
+                 Commit      : ${env.GIT_COMMIT_SHORT ?: 'N/A'}
+                 Branch      : ${env.GIT_BRANCH_NAME ?: 'N/A'}
+                 CLI Δ       : ${env.CLI_CHANGED ?: 'N/A'}
+                 Result      : ${currentBuild.currentResult}
+                =============================================
+                """
+            }
+            cleanWs()
+        }
+        success {
+            echo "✅ CLI CI passed for v${env.SEM_VERSION ?: 'unknown'} (build #${env.BUILD_NUMBER})"
+        }
+        failure {
+            echo "❌ CLI CI failed for v${env.SEM_VERSION ?: 'unknown'} (build #${env.BUILD_NUMBER})"
+        }
+    }
+}

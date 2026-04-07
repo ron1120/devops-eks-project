@@ -1,0 +1,53 @@
+# =============================================
+# Production Dockerfile for SeyoAWE Engine
+# =============================================
+# Multi-stage build: test → production
+
+# ---------- Stage 1: Test ----------
+FROM python:3.12-slim AS test
+
+WORKDIR /workspace
+
+COPY engine/ engine/
+COPY modules/ modules/
+COPY tests/engine/ tests/engine/
+COPY VERSION .
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir -r engine/requirements.txt pytest pyyaml
+
+RUN chmod +x engine/run.sh engine/seyoawe.linux
+
+RUN pytest tests/engine/ -v --tb=short
+
+# ---------- Stage 2: Production ----------
+FROM python:3.12-slim AS production
+
+LABEL maintainer="ron1120"
+LABEL description="SeyoAWE Engine"
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl git \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r seyoawe && useradd -r -g seyoawe -d /app seyoawe
+
+COPY engine/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY engine/ .
+COPY modules/ modules/
+COPY VERSION .
+
+RUN chmod +x run.sh seyoawe.linux
+
+USER seyoawe
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/ || exit 1
+
+ENTRYPOINT ["./seyoawe.linux"]

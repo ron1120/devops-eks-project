@@ -6,8 +6,8 @@ import shutil
 # Base paths — go up from tests/cli/integration/ to the project root
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 CLI_SCRIPT = os.path.join(BASE_DIR, "cli", "sawectl.py")
-MODULES_DIR = os.path.join(BASE_DIR, "modules")
-SAMPLES_DIR = os.path.join(BASE_DIR, "workflows", "samples")
+MODULES_DIR = os.path.join(BASE_DIR, "engine", "modules")
+SAMPLES_DIR = os.path.join(BASE_DIR, "engine", "workflows", "samples")
 
 
 def run_cli(*args):
@@ -79,7 +79,8 @@ class TestCLIInitModule:
     def test_init_module_creates_files(self):
         """Test that init module creates the expected skeleton files."""
         module_name = "test_scaffold_module"
-        module_path = os.path.join(MODULES_DIR, module_name)
+        # CLI creates modules relative to CWD (modules/<name>)
+        module_path = os.path.join(BASE_DIR, "modules", module_name)
 
         # Clean up if leftover from a previous run
         if os.path.exists(module_path):

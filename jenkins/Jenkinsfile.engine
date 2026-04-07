@@ -1,0 +1,297 @@
+//=============================================
+// CI Pipeline — SeyoAWE Engine
+//=============================================
+// Stages: Checkout → Version → Lint → Unit Tests
+//       → Integration Tests → Docker Build → Push
+//=============================================
+
+pipeline {
+    agent any
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        // ---- Git ----
+        GIT_REPO        = 'https://github.com/ron1120/devops-eks-project.git'
+        GIT_CREDENTIALS = 'RonGitUser'
+
+        // ---- Docker Hub ----
+        DOCKERHUB_CREDENTIALS = 'DockerHubCredentials'   // Jenkins credentials ID
+        DOCKERHUB_REPO        = 'ron1120/seyoawe-engine' // <org>/<repo>
+
+        // ---- Build ----
+        VENV_DIR = 'venv'
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+
+        // ================================================
+        // 1. Checkout
+        // ================================================
+        stage('Checkout') {
+            steps {
+                script {
+                    git branch: 'main',
+                        credentialsId: env.GIT_CREDENTIALS,
+                        url: env.GIT_REPO
+
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.GIT_BRANCH_NAME = sh(
+                        script: 'git rev-parse --abbrev-ref HEAD || echo main',
+                        returnStdout: true
+                    ).trim()
+                    if (env.GIT_BRANCH_NAME == 'HEAD') { env.GIT_BRANCH_NAME = 'main' }
+
+                    echo "Branch: ${env.GIT_BRANCH_NAME}  Commit: ${env.GIT_COMMIT_SHORT}"
+                }
+            }
+        }
+
+        // ================================================
+        // 2. Read Semantic Version
+        // ================================================
+        stage('Version') {
+            steps {
+                script {
+                    env.SEM_VERSION = sh(
+                        script: 'cat VERSION',
+                        returnStdout: true
+                    ).trim()
+
+                    env.BUILD_TAG = "${env.SEM_VERSION}-${env.BUILD_NUMBER}"
+                    env.IMAGE_TAG = "${env.SEM_VERSION}"
+
+                    echo """
+                    =========================================
+                     Semantic Version : ${env.SEM_VERSION}
+                     Build Tag        : ${env.BUILD_TAG}
+                     Image Tag        : ${env.IMAGE_TAG}
+                     Commit           : ${env.GIT_COMMIT_SHORT}
+                    =========================================
+                    """
+                }
+            }
+        }
+
+        // ================================================
+        // 3. Detect Engine Changes
+        // ================================================
+        stage('Detect Changes') {
+            steps {
+                script {
+                    def previousCommit = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: ''
+
+                    if (previousCommit) {
+                        def changes = sh(
+                            script: "git diff --name-only ${previousCommit} HEAD || true",
+                            returnStdout: true
+                        ).trim()
+
+                        echo "Changed files:\n${changes}"
+
+                        env.ENGINE_CHANGED = (
+                            changes.contains('engine/') ||
+                            changes.contains('engine/modules/') ||
+                            changes.contains('docker/Dockerfile.engine') ||
+                            changes.contains('VERSION')
+                        ) ? 'true' : 'false'
+                    } else {
+                        echo "No previous successful commit — full build"
+                        env.ENGINE_CHANGED = 'true'
+                    }
+
+                    echo "Engine changed: ${env.ENGINE_CHANGED}"
+
+                    if (env.ENGINE_CHANGED == 'false') {
+                        echo "No engine-related changes detected. Skipping remaining stages."
+                    }
+                }
+            }
+        }
+
+        // ================================================
+        // 4. Setup Python Environment
+        // ================================================
+        stage('Setup Environment') {
+            when { environment name: 'ENGINE_CHANGED', value: 'true' }
+            steps {
+                sh """
+                    python3 -m venv ${env.VENV_DIR}
+                    . ${env.VENV_DIR}/bin/activate
+                    pip install --upgrade pip
+                    pip install -r engine/requirements.txt
+                    pip install pytest pyyaml pylint
+                """
+            }
+        }
+
+        // ================================================
+        // 5. Lint
+        // ================================================
+        stage('Lint') {
+            when { environment name: 'ENGINE_CHANGED', value: 'true' }
+            steps {
+                echo "Linting engine Python modules..."
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    pylint engine/modules/*/[a-z]*.py \
+                        --disable=C0114,C0115,C0116,C0103,C0301,R0903,W0613,W0622,E0401,C0411,W0612,R0801,W0611 \
+                        --fail-under=5.0 \
+                        --output-format=colorized || true
+                """
+                // Also lint any top-level engine Python files
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    find engine/ -maxdepth 1 -name '*.py' | head -20 | xargs -r pylint \
+                        --disable=C0114,C0115,C0116,C0103,C0301,R0903,W0613,W0622,E0401,C0411,W0612,R0801,W0611 \
+                        --fail-under=5.0 \
+                        --output-format=colorized || true
+                """
+            }
+        }
+
+        // ================================================
+        // 6. Unit Tests
+        // ================================================
+        stage('Unit Tests') {
+            when { environment name: 'ENGINE_CHANGED', value: 'true' }
+            steps {
+                echo "Running engine unit tests (v${env.SEM_VERSION})..."
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    pytest tests/engine/unit/ -v --tb=short --junitxml=reports/engine-unit.xml
+                """
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'reports/engine-unit.xml'
+                }
+            }
+        }
+
+        // ================================================
+        // 7. Integration Tests
+        // ================================================
+        stage('Integration Tests') {
+            when { environment name: 'ENGINE_CHANGED', value: 'true' }
+            steps {
+                echo "Running engine integration tests (v${env.SEM_VERSION})..."
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    pytest tests/engine/integration/ -v --tb=short --junitxml=reports/engine-integration.xml
+                """
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'reports/engine-integration.xml'
+                }
+            }
+        }
+
+        // ================================================
+        // 8. Docker Build
+        // ================================================
+        stage('Docker Build') {
+            when { environment name: 'ENGINE_CHANGED', value: 'true' }
+            steps {
+                echo "Building engine production image v${env.SEM_VERSION}..."
+                sh """
+                    docker build \
+                        -f docker/Dockerfile.engine_prod \
+                        --build-arg VERSION=${env.SEM_VERSION} \
+                        -t ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} \
+                        -t ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} \
+                        -t ${env.DOCKERHUB_REPO}:latest \
+                        .
+                """
+            }
+        }
+
+        // ================================================
+        // 9. Push to Docker Hub
+        // ================================================
+        stage('Push to Docker Hub') {
+            when {
+                allOf {
+                    environment name: 'ENGINE_CHANGED', value: 'true'
+                    branch 'main'
+                }
+            }
+            steps {
+                echo "Pushing engine image to Docker Hub..."
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: env.DOCKERHUB_CREDENTIALS,
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )
+                ]) {
+                    sh """
+                        echo "\${DOCKER_PASS}" | docker login -u "\${DOCKER_USER}" --password-stdin
+
+                        docker push ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG}
+                        docker push ${env.DOCKERHUB_REPO}:${env.BUILD_TAG}
+                        docker push ${env.DOCKERHUB_REPO}:latest
+
+                        docker logout
+                    """
+                }
+            }
+        }
+
+        // ================================================
+        // 10. Cleanup Docker Images
+        // ================================================
+        stage('Cleanup') {
+            when { environment name: 'ENGINE_CHANGED', value: 'true' }
+            steps {
+                echo "Removing local Docker images..."
+                sh """
+                    docker rmi ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} || true
+                    docker rmi ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} || true
+                    docker rmi ${env.DOCKERHUB_REPO}:latest || true
+                """
+            }
+        }
+
+    } // end stages
+
+    post {
+        always {
+            script {
+                echo """
+                =============================================
+                 Engine CI Pipeline — Summary
+                =============================================
+                 Version     : ${env.SEM_VERSION ?: 'N/A'}
+                 Build       : ${env.BUILD_TAG ?: 'N/A'}
+                 Commit      : ${env.GIT_COMMIT_SHORT ?: 'N/A'}
+                 Branch      : ${env.GIT_BRANCH_NAME ?: 'N/A'}
+                 Engine Δ    : ${env.ENGINE_CHANGED ?: 'N/A'}
+                 Result      : ${currentBuild.currentResult}
+                =============================================
+                """
+            }
+            cleanWs()
+        }
+        success {
+            echo "✅ Engine CI passed for v${env.SEM_VERSION ?: 'unknown'} (build #${env.BUILD_NUMBER})"
+        }
+        failure {
+            echo "❌ Engine CI failed for v${env.SEM_VERSION ?: 'unknown'} (build #${env.BUILD_NUMBER})"
+        }
+    }
+}

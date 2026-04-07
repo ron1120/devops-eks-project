@@ -1,0 +1,46 @@
+# =============================================
+# Production Dockerfile for SeyoAWE CLI (sawectl)
+# =============================================
+# Multi-stage build: test → package → production
+
+# ---------- Stage 1: Test ----------
+FROM python:3.12-slim AS test
+
+WORKDIR /workspace
+
+COPY cli/ cli/
+COPY sawectl/ sawectl/
+COPY modules/ modules/
+COPY workflows/ workflows/
+COPY tests/cli/ tests/cli/
+COPY VERSION .
+
+RUN pip install --no-cache-dir -r cli/requirements.txt pytest
+
+RUN pytest tests/cli/ -v --tb=short
+
+# ---------- Stage 2: Production ----------
+FROM python:3.12-slim AS production
+
+LABEL maintainer="ron1120"
+LABEL description="SeyoAWE CLI Tool (sawectl)"
+
+WORKDIR /app
+
+RUN groupadd -r seyoawe && useradd -r -g seyoawe -d /app seyoawe
+
+COPY cli/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY cli/sawectl.py .
+COPY cli/dsl.schema.json .
+COPY cli/module.schema.json .
+COPY VERSION .
+
+# Include pre-built binaries
+COPY sawectl/binaries/linux/ /usr/local/bin/
+RUN chmod +x /usr/local/bin/sawectl
+
+USER seyoawe
+
+ENTRYPOINT ["python", "sawectl.py"]

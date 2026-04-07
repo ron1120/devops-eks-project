@@ -10,8 +10,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 ENGINE_DIR = os.path.join(BASE_DIR, "engine")
 ENGINE_BIN = os.path.join(ENGINE_DIR, "seyoawe.macos.arm")
 CLI_SCRIPT = os.path.join(BASE_DIR, "cli", "sawectl.py")
-MODULES_DIR = os.path.join(BASE_DIR, "modules")
-SAMPLES_DIR = os.path.join(BASE_DIR, "workflows", "samples")
+MODULES_DIR = os.path.join(BASE_DIR, "engine", "modules")
+SAMPLES_DIR = os.path.join(BASE_DIR, "engine", "workflows", "samples")
 
 ENGINE_URL = "http://localhost:8080"
 ENGINE_ADHOC = f"{ENGINE_URL}/api/adhoc"

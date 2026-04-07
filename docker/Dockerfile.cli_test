@@ -5,8 +5,8 @@ WORKDIR /workspace
 
 # Copy the CLI, tests, and the data they reference
 COPY cli/ cli/
-COPY modules/ modules/
-COPY workflows/ workflows/
+COPY engine/modules/ engine/modules/
+COPY engine/workflows/ engine/workflows/
 COPY tests/cli/ tests/cli/
 
 # Install the CLI requirements and pytest

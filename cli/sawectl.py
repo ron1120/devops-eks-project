@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 
-VERSION = "0.0.1"
 # SeyoAWE CLI Tool
 
 import os
 import sys
+
+def _read_version():
+    """Read version from the shared VERSION file at project root."""
+    version_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VERSION")
+    if os.path.isfile(version_file):
+        with open(version_file, "r") as f:
+            return f.read().strip()
+    return "0.0.0-unknown"
+
+VERSION = _read_version()
 import argparse
 import requests
 import yaml

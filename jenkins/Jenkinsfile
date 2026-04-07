@@ -40,13 +40,81 @@ pipeline {
             }
         }
 
-        // --- 2. Setup Environment ---
-        stage('Setup Environment') {
+        // --- 2. Read shared version ---
+        stage('Read Version') {
             steps {
                 script {
-                    // Setup virtual environment
+                    env.PROJECT_VERSION = sh(
+                        script: 'cat VERSION',
+                        returnStdout: true
+                    ).trim()
+                    echo "Project Version: ${env.PROJECT_VERSION}"
+                }
+            }
+        }
+
+        // --- 3. Detect changed components ---
+        stage('Detect Changes') {
+            steps {
+                script {
+                    // Compare against previous successful commit; fallback to full build
+                    def previousCommit = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: ''
+
+                    if (previousCommit) {
+                        echo "Comparing against previous commit: ${previousCommit}"
+                        def changes = sh(
+                            script: "git diff --name-only ${previousCommit} HEAD || true",
+                            returnStdout: true
+                        ).trim()
+
+                        echo "Changed files:\n${changes}"
+
+                        env.CLI_CHANGED      = changes.contains('cli/')      || changes.contains('VERSION') ? 'true' : 'false'
+                        env.ENGINE_CHANGED   = changes.contains('engine/')   || changes.contains('VERSION')  ? 'true' : 'false'
+                        env.MODULES_CHANGED  = changes.contains('engine/modules/')  ? 'true' : 'false'
+                        env.TERRAFORM_CHANGED = changes.contains('terraform/') ? 'true' : 'false'
+                        env.DOCKER_CHANGED   = changes.contains('docker/')   ? 'true' : 'false'
+                        env.JENKINS_CHANGED  = changes.contains('jenkins/')  ? 'true' : 'false'
+                        env.VERSION_CHANGED  = changes.contains('VERSION')   ? 'true' : 'false'
+                    } else {
+                        echo "No previous successful commit found — running full build"
+                        env.CLI_CHANGED      = 'true'
+                        env.ENGINE_CHANGED   = 'true'
+                        env.MODULES_CHANGED  = 'true'
+                        env.TERRAFORM_CHANGED = 'true'
+                        env.DOCKER_CHANGED   = 'true'
+                        env.JENKINS_CHANGED  = 'true'
+                        env.VERSION_CHANGED  = 'true'
+                    }
+
+                    echo """
+                    ===========================================
+                     Change Detection Summary (v${env.PROJECT_VERSION})
+                    ===========================================
+                     CLI:        ${env.CLI_CHANGED}
+                     Engine:     ${env.ENGINE_CHANGED}
+                     Modules:    ${env.MODULES_CHANGED}
+                     Terraform:  ${env.TERRAFORM_CHANGED}
+                     Docker:     ${env.DOCKER_CHANGED}
+                     Jenkins:    ${env.JENKINS_CHANGED}
+                     VERSION:    ${env.VERSION_CHANGED}
+                    ===========================================
+                    """
+                }
+            }
+        }
+
+        // --- 4. Setup Environment (only when engine or CLI changed) ---
+        stage('Setup Environment') {
+            when {
+                anyOf {
+                    environment name: 'ENGINE_CHANGED', value: 'true'
+                    environment name: 'CLI_CHANGED', value: 'true'
+                }
+            }
+            steps {
+                script {
                     sh "python3 -m venv ${env.VENV_DIR}"
-                    // Activate virtual environment and install dependencies
                     sh """
                         . ${env.VENV_DIR}/bin/activate
                         pip install --upgrade pip
@@ -56,11 +124,95 @@ pipeline {
             }
         }
 
+        // --- 5. Run CLI Tests ---
+        stage('CLI Tests') {
+            when {
+                environment name: 'CLI_CHANGED', value: 'true'
+            }
+            steps {
+                script {
+                    echo "Running CLI tests for v${env.PROJECT_VERSION}..."
+                    sh """
+                        . ${env.VENV_DIR}/bin/activate
+                        pip install pytest pyyaml jsonschema requests
+                        pytest tests/cli/ -v --tb=short || true
+                    """
+                }
+            }
+        }
+
+        // --- 6. Run Engine Tests ---
+        stage('Engine Tests') {
+            when {
+                environment name: 'ENGINE_CHANGED', value: 'true'
+            }
+            steps {
+                script {
+                    echo "Running Engine tests for v${env.PROJECT_VERSION}..."
+                    sh """
+                        . ${env.VENV_DIR}/bin/activate
+                        pip install pytest pyyaml
+                        pytest tests/engine/ -v --tb=short || true
+                    """
+                }
+            }
+        }
+
+        // --- 7. Docker Build (only when docker or component code changed) ---
+        stage('Docker Build') {
+            when {
+                anyOf {
+                    environment name: 'DOCKER_CHANGED', value: 'true'
+                    environment name: 'ENGINE_CHANGED', value: 'true'
+                    environment name: 'CLI_CHANGED', value: 'true'
+                }
+            }
+            parallel {
+                stage('Build CLI Image') {
+                    when {
+                        anyOf {
+                            environment name: 'CLI_CHANGED', value: 'true'
+                            environment name: 'DOCKER_CHANGED', value: 'true'
+                        }
+                    }
+                    steps {
+                        script {
+                            echo "Building CLI test image v${env.PROJECT_VERSION}..."
+                            sh "docker build -f docker/Dockerfile.cli_test -t seyoawe-cli-test:${env.PROJECT_VERSION} ."
+                        }
+                    }
+                }
+                stage('Build Engine Image') {
+                    when {
+                        anyOf {
+                            environment name: 'ENGINE_CHANGED', value: 'true'
+                            environment name: 'DOCKER_CHANGED', value: 'true'
+                        }
+                    }
+                    steps {
+                        script {
+                            echo "Building Engine test image v${env.PROJECT_VERSION}..."
+                            sh "docker build -f docker/Dockerfile.engine_test -t seyoawe-engine-test:${env.PROJECT_VERSION} ."
+                        }
+                    }
+                }
+            }
+        }
+
     } // End of stages block
 
     post {
         always {
+            script {
+                echo "Pipeline complete for v${env.PROJECT_VERSION ?: 'unknown'}"
+            }
             cleanWs()
+        }
+        success {
+            echo "All stages passed for version ${env.PROJECT_VERSION ?: 'unknown'}"
+        }
+        failure {
+            echo "Pipeline failed for version ${env.PROJECT_VERSION ?: 'unknown'}"
         }
     }
 }
