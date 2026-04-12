@@ -23,7 +23,7 @@ pipeline {
 
         // ---- Docker Hub ----
         DOCKERHUB_CREDENTIALS = 'DockerHubCredentials'
-        DOCKERHUB_REPO        = 'ron1120/seyoawe-cli'
+        DOCKERHUB_REPO        = 'ronsss/sawe-cli'
 
         // ---- Build ----
         VENV_DIR = 'venv'
