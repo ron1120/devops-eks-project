@@ -118,6 +118,78 @@ resource "aws_security_group" "ec2_sg" {
   }
 }
 
+# IAM Role for EC2 (Secrets Manager access)
+data "aws_caller_identity" "current" {}
+
+resource "aws_iam_role" "jenkins_ec2" {
+  name = "${var.project_name}-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+
+  tags = {
+    Name = "${var.project_name}-ec2-role"
+  }
+}
+
+resource "aws_iam_role_policy" "jenkins_secrets" {
+  name = "${var.project_name}-secrets-policy"
+  role = aws_iam_role.jenkins_ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.dockerhub_credentials.arn,
+          aws_secretsmanager_secret.git_credentials.arn
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = "secretsmanager:ListSecrets"
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "jenkins" {
+  name = "${var.project_name}-instance-profile"
+  role = aws_iam_role.jenkins_ec2.name
+}
+
+# Secrets Manager
+resource "aws_secretsmanager_secret" "dockerhub_credentials" {
+  name        = "DockerHubCredentials"
+  description = "Docker Hub username and password/token for Jenkins"
+
+  tags = {
+    Name                        = "${var.project_name}-dockerhub-creds"
+    "jenkins:credentials:type"  = "usernamePassword"
+  }
+}
+
+resource "aws_secretsmanager_secret" "git_credentials" {
+  name        = "RonGitUser"
+  description = "GitHub username and PAT for Jenkins"
+
+  tags = {
+    Name                        = "${var.project_name}-git-creds"
+    "jenkins:credentials:type"  = "usernamePassword"
+  }
+}
+
 # EC2 Instance
 resource "aws_instance" "app" {
   ami                         = var.ami_id
@@ -126,6 +198,13 @@ resource "aws_instance" "app" {
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.ec2_sg.id]
   key_name                    = var.key_name
+  iam_instance_profile        = aws_iam_instance_profile.jenkins.name
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "optional"
+    http_put_response_hop_limit = 2
+  }
 
   tags = {
     Name = "${var.project_name}-server"

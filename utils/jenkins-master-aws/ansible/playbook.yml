@@ -82,6 +82,8 @@
         volumes:
           - jenkins_home:/var/jenkins_home
           - /var/run/docker.sock:/var/run/docker.sock
+        env:
+          AWS_REGION: "us-east-1"
 
     # ── Jenkins Container Dependencies ──
     - name: Install Python inside Jenkins container
@@ -113,7 +115,65 @@
         path: /var/run/docker.sock
         mode: "0666"
 
-    - name: Restart Jenkins container to pick up group changes
+    # ── AWS CLI inside Jenkins container ──
+    - name: Install AWS CLI inside Jenkins container
+      command: >
+        docker exec -u root {{ container_name }} bash -c
+        "pip install --break-system-packages awscli 2>/dev/null || pip install awscli"
+      changed_when: true
+
+    # ── Credentials from Secrets Manager (Groovy init script) ──
+    - name: Create init.groovy.d directory
+      file:
+        path: "{{ jenkins_home }}/init.groovy.d"
+        state: directory
+        mode: "0755"
+
+    - name: Deploy Secrets Manager credentials sync script
+      copy:
+        dest: "{{ jenkins_home }}/init.groovy.d/aws-secrets.groovy"
+        mode: "0644"
+        content: |
+          import com.cloudbees.plugins.credentials.*
+          import com.cloudbees.plugins.credentials.domains.*
+          import com.cloudbees.plugins.credentials.impl.*
+          import groovy.json.JsonSlurper
+
+          def fetchSecret(String secretId) {
+              def awsRegion = System.getenv("AWS_REGION") ?: "us-east-1"
+              def cmd = ["aws", "secretsmanager", "get-secret-value",
+                         "--secret-id", secretId, "--region", awsRegion,
+                         "--query", "SecretString", "--output", "text"]
+              def proc = cmd.execute()
+              proc.waitFor()
+              if (proc.exitValue() == 0) {
+                  return new JsonSlurper().parseText(proc.text.trim())
+              }
+              println("[AWS Secrets] Failed to fetch ${secretId}: ${proc.err.text}")
+              return null
+          }
+
+          def createOrUpdate(String id, String user, String pass) {
+              def store = SystemCredentialsProvider.getInstance().getStore()
+              def domain = Domain.global()
+              SystemCredentialsProvider.getInstance().getCredentials().findAll { it.id == id }.each {
+                  store.removeCredentials(domain, it)
+              }
+              store.addCredentials(domain, new UsernamePasswordCredentialsImpl(
+                  CredentialsScope.GLOBAL, id, "From AWS Secrets Manager", user, pass
+              ))
+              println("[AWS Secrets] Credential '${id}' ready")
+          }
+
+          println("[AWS Secrets] Syncing credentials from AWS Secrets Manager...")
+          ["DockerHubCredentials", "RonGitUser"].each { secretId ->
+              def secret = fetchSecret(secretId)
+              if (secret) {
+                  createOrUpdate(secretId, secret.username, secret.password)
+              }
+          }
+
+    - name: Restart Jenkins container to pick up changes
       docker_container:
         name: "{{ container_name }}"
         state: started

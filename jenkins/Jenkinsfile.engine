@@ -236,23 +236,20 @@ pipeline {
             }
             steps {
                 echo "Pushing engine image to Docker Hub..."
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: env.DOCKERHUB_CREDENTIALS,
-                        usernameVariable: 'DOCKER_USER',
-                        passwordVariable: 'DOCKER_PASS'
-                    )
-                ]) {
-                    sh """
-                        echo "\${DOCKER_PASS}" | docker login -u "\${DOCKER_USER}" --password-stdin
+                sh """
+                    set +x
+                    SECRET=\$(aws secretsmanager get-secret-value --secret-id DockerHubCredentials --region us-east-1 --query SecretString --output text)
+                    DOCKER_USER=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
+                    DOCKER_PASS=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+                    echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
+                    set -x
 
-                        docker push ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG}
-                        docker push ${env.DOCKERHUB_REPO}:${env.BUILD_TAG}
-                        docker push ${env.DOCKERHUB_REPO}:latest
+                    docker push ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG}
+                    docker push ${env.DOCKERHUB_REPO}:${env.BUILD_TAG}
+                    docker push ${env.DOCKERHUB_REPO}:latest
 
-                        docker logout
-                    """
-                }
+                    docker logout
+                """
             }
         }
 
@@ -267,6 +264,8 @@ pipeline {
                     docker rmi ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} || true
                     docker rmi ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} || true
                     docker rmi ${env.DOCKERHUB_REPO}:latest || true
+                    docker image prune -f || true
+                    docker builder prune -f || true
                 """
             }
         }
