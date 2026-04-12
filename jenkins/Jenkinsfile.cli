@@ -262,7 +262,7 @@ pipeline {
             when {
                 allOf {
                     environment name: 'CLI_CHANGED', value: 'true'
-                    branch 'main'
+                    environment name: 'GIT_BRANCH_NAME', value: 'main'
                 }
             }
             steps {
@@ -294,7 +294,7 @@ pipeline {
             when {
                 allOf {
                     environment name: 'CLI_CHANGED', value: 'true'
-                    branch 'main'
+                    environment name: 'GIT_BRANCH_NAME', value: 'main'
                 }
             }
             steps {
