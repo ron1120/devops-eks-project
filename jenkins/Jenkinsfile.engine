@@ -6,7 +6,14 @@
 //=============================================
 
 pipeline {
-    agent any
+    // Python + apt for git/docker CLI; host daemon via socket (see jenkins/README.md)
+    agent {
+        docker {
+            image 'python:3.12-bookworm'
+            args '-v /var/run/docker.sock:/var/run/docker.sock'
+            reuseNode true
+        }
+    }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
@@ -39,6 +46,12 @@ pipeline {
         // ================================================
         stage('Checkout') {
             steps {
+                sh '''
+                    if ! command -v git >/dev/null 2>&1; then
+                        apt-get update -qq
+                        apt-get install -y -qq git ca-certificates
+                    fi
+                '''
                 script {
                     git branch: 'main',
                         credentialsId: env.GIT_CREDENTIALS,
@@ -104,8 +117,11 @@ pipeline {
 
                         env.ENGINE_CHANGED = (
                             changes.contains('engine/') ||
-                            changes.contains('engine/modules/') ||
-                            changes.contains('docker/Dockerfile.engine') ||
+                            changes.contains('tests/engine/') ||
+                            changes.contains('modules/') ||
+                            changes.contains('docker/Dockerfile.engine_prod') ||
+                            changes.contains('docker/Dockerfile.engine_test') ||
+                            changes.contains('jenkins/Jenkinsfile.engine') ||
                             changes.contains('VERSION')
                         ) ? 'true' : 'false'
                     } else {
@@ -129,11 +145,26 @@ pipeline {
             when { environment name: 'ENGINE_CHANGED', value: 'true' }
             steps {
                 sh """
+                    set -e
+                    if ! command -v docker >/dev/null 2>&1; then
+                        apt-get update -qq
+                        apt-get install -y -qq ca-certificates curl
+                        ARCH=\$(uname -m)
+                        case "\$ARCH" in x86_64) DOCKER_ARCH=x86_64 ;;
+                            aarch64|arm64) DOCKER_ARCH=aarch64 ;;
+                            *) echo "Unsupported arch: \$ARCH"; exit 1 ;;
+                        esac
+                        curl -fsSL "https://download.docker.com/linux/static/stable/\${DOCKER_ARCH}/docker-27.4.0.tgz" | tar xz
+                        mv docker/docker /usr/local/bin/docker
+                        chmod +x /usr/local/bin/docker
+                        rm -rf docker
+                    fi
                     python3 -m venv ${env.VENV_DIR}
                     . ${env.VENV_DIR}/bin/activate
                     pip install --upgrade pip
                     pip install -r engine/requirements.txt
                     pip install pytest pyyaml pylint
+                    mkdir -p reports
                 """
             }
         }
