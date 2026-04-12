@@ -9,9 +9,7 @@ FROM python:3.12-slim AS test
 WORKDIR /workspace
 
 COPY cli/ cli/
-COPY sawectl/ sawectl/
-COPY modules/ modules/
-COPY workflows/ workflows/
+COPY engine/ engine/
 COPY tests/cli/ tests/cli/
 COPY VERSION .
 
@@ -37,8 +35,8 @@ COPY cli/dsl.schema.json .
 COPY cli/module.schema.json .
 COPY VERSION .
 
-# Include pre-built binaries
-COPY sawectl/binaries/linux/ /usr/local/bin/
+# Include pre-built binaries (packaged under cli/ in this repo)
+COPY cli/binaries/linux/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/sawectl
 
 USER seyoawe
