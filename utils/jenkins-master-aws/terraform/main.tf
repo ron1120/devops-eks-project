@@ -174,9 +174,23 @@ variable "existing_vpc_id" {
   default     = ""
 }
 
+# Elastic IP
+resource "aws_eip" "jenkins" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project_name}-eip"
+  }
+}
+
+resource "aws_eip_association" "jenkins" {
+  instance_id   = aws_instance.app.id
+  allocation_id = aws_eip.jenkins.id
+}
+
 # Outputs
 output "instance_public_ip" {
-  value = aws_instance.app.public_ip
+  value = aws_eip.jenkins.public_ip
 }
 
 output "vpc_id" {

@@ -69,6 +69,7 @@
       docker_image:
         name: "{{ docker_image }}"
         source: pull
+
     - name: Run Jenkins container
       docker_container:
         name: "{{ container_name }}"
@@ -80,3 +81,40 @@
           - "50000:50000"
         volumes:
           - jenkins_home:/var/jenkins_home
+          - /var/run/docker.sock:/var/run/docker.sock
+
+    # ── Jenkins Container Dependencies ──
+    - name: Install Python inside Jenkins container
+      command: >
+        docker exec -u root {{ container_name }} bash -c
+        "apt-get update && apt-get install -y python3 python3-venv python3-pip"
+      changed_when: true
+
+    - name: Install Docker prerequisites inside Jenkins container
+      command: >
+        docker exec -u root {{ container_name }} bash -c
+        "apt-get install -y apt-transport-https ca-certificates gnupg lsb-release curl"
+      changed_when: true
+
+    - name: Install Docker CE inside Jenkins container
+      command: >
+        docker exec -u root {{ container_name }} bash -c
+        "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && sh /tmp/get-docker.sh"
+      changed_when: true
+
+    - name: Add jenkins user to docker group inside container
+      command: >
+        docker exec -u root {{ container_name }} bash -c
+        "usermod -aG docker jenkins"
+      changed_when: true
+
+    - name: Fix Docker socket permissions
+      file:
+        path: /var/run/docker.sock
+        mode: "0666"
+
+    - name: Restart Jenkins container to pick up group changes
+      docker_container:
+        name: "{{ container_name }}"
+        state: started
+        restart: true
