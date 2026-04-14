@@ -1,18 +1,36 @@
-"""If pytest is started with no paths or only a suite directory (unit/integration/e2e), run all suites."""
+"""Widen collection to all suites only when appropriate — never for explicit paths like cli/tests-cli/unit/."""
 
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent
-_SUITES = frozenset((_ROOT / "unit", _ROOT / "integration", _ROOT / "e2e"))
+_SUITES = (_ROOT / "unit", _ROOT / "integration", _ROOT / "e2e")
+
+
+def _should_keep_single_suite_only(arg: str, resolved: Path) -> bool:
+    """True → do not expand (e.g. Jenkins: cli/tests-cli/unit/, or pytest /abs/.../unit from another cwd)."""
+    if resolved not in _SUITES or not resolved.is_dir():
+        return False
+    parts = Path(arg).as_posix().split("/")
+    if len(parts) >= 3 and parts[0] == "cli" and parts[1] == "tests-cli":
+        return True
+    if Path(arg).is_absolute() and Path.cwd().resolve() != resolved:
+        return True
+    return False
 
 
 def pytest_configure(config):
     args = list(config.args)
-    if not args or args == ["."]:
-        config.args = [str(p) for p in sorted(_SUITES, key=lambda x: x.name)]
+    if len(args) == 1:
+        resolved = Path(args[0]).expanduser().resolve()
+        if resolved.is_dir() and resolved in _SUITES:
+            if not _should_keep_single_suite_only(args[0], resolved):
+                config.args = [str(p) for p in sorted(_SUITES, key=lambda x: x.name)]
+            return
+    if args and args != ["."]:
         return
-    if len(args) != 1:
+    cwd = Path.cwd().resolve()
+    under_root = cwd == _ROOT or _ROOT in cwd.parents
+    if not under_root:
         return
-    path = Path(args[0]).expanduser().resolve()
-    if path.is_dir() and path in _SUITES:
+    if cwd == _ROOT or (cwd.name in ("unit", "integration", "e2e") and cwd.parent == _ROOT):
         config.args = [str(p) for p in sorted(_SUITES, key=lambda x: x.name)]
