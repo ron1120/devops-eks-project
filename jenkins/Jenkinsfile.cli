@@ -135,7 +135,9 @@ pipeline {
             steps {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
+                    # E2E: always use a fresh pull of the published engine image, then run it for pytest.
                     docker pull ${env.ENGINE_IMAGE}
+                    docker image inspect ${env.ENGINE_IMAGE} --format 'E2E engine image id={{.Id}}'
                     # Publish 8080 to the Docker host. Container bridge IPs (e.g. 172.17.0.x) are not
                     # reachable from a Jenkins controller running inside another container; use host
                     # gateway + mapped port instead (Linux bridge: 172.17.0.1, Desktop: host.docker.internal).

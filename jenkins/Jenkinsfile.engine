@@ -134,10 +134,10 @@ pipeline {
             steps {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
-                    docker build -f docker/Dockerfile.engine \
-                        --build-arg VERSION=${env.SEM_VERSION} \
-                        -t engine-e2e-img-${env.BUILD_NUMBER} .
-                    docker run -d -P --name engine-e2e-${env.BUILD_NUMBER} engine-e2e-img-${env.BUILD_NUMBER}
+                    # E2E: same as CLI — pull published :latest from Docker Hub and run it (not a local build).
+                    docker pull ${env.DOCKERHUB_REPO}:latest
+                    docker image inspect ${env.DOCKERHUB_REPO}:latest --format 'E2E engine image id={{.Id}}'
+                    docker run -d -P --name engine-e2e-${env.BUILD_NUMBER} ${env.DOCKERHUB_REPO}:latest
                     ENGINE_HOST=172.17.0.1
                     if command -v getent >/dev/null 2>&1 && getent hosts host.docker.internal >/dev/null 2>&1; then
                         ENGINE_HOST=host.docker.internal
@@ -167,7 +167,6 @@ pipeline {
             post {
                 always {
                     sh "docker stop engine-e2e-${env.BUILD_NUMBER} || true && docker rm engine-e2e-${env.BUILD_NUMBER} || true"
-                    sh "docker rmi engine-e2e-img-${env.BUILD_NUMBER} || true"
                     junit allowEmptyResults: true, testResults: 'reports/engine-e2e.xml'
                 }
             }
