@@ -208,6 +208,12 @@ resource "aws_instance" "app" {
     http_put_response_hop_limit = 2
   }
 
+  root_block_device {
+    volume_size           = var.root_volume_gb
+    volume_type           = "gp3"
+    delete_on_termination = true
+  }
+
   tags = {
     Name = "${var.project_name}-server"
   }
@@ -247,6 +253,12 @@ variable "instance_type" {
 variable "key_name" {
   description = "Name of the SSH key pair"
   type        = string
+}
+
+variable "root_volume_gb" {
+  description = "Root EBS volume size in GiB (Jenkins/Docker need enough space)"
+  type        = number
+  default     = 20
 }
 
 variable "existing_vpc_id" {
