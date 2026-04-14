@@ -41,7 +41,8 @@ COPY engine/ .
 COPY modules/ modules/
 COPY VERSION .
 
-RUN chmod +x run.sh seyoawe.linux
+RUN chmod +x run.sh seyoawe.linux \
+    && chown -R seyoawe:seyoawe /app
 
 USER seyoawe
 

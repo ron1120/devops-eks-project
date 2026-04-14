@@ -149,6 +149,12 @@ pipeline {
                     echo "E2E engine URL: \${ENGINE_URL}"
                     ready=0
                     for i in \$(seq 1 30); do
+                        running=\$(docker inspect -f '{{.State.Running}}' engine-e2e-${env.BUILD_NUMBER} 2>/dev/null || echo false)
+                        if [ "\$running" != "true" ]; then
+                            echo "Engine container stopped before becoming ready (check permissions / logs)"
+                            docker logs engine-e2e-${env.BUILD_NUMBER} 2>&1 | tail -n 80 || true
+                            exit 1
+                        fi
                         if curl -sf "\${ENGINE_URL}/" >/dev/null 2>&1; then ready=1; break; fi
                         sleep 2
                     done
