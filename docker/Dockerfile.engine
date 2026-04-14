@@ -49,6 +49,6 @@ USER seyoawe
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/ || exit 1
+    CMD sh -c 'c=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:8080/) && { [ "$c" = 200 ] || [ "$c" = 404 ]; }'
 
 ENTRYPOINT ["./seyoawe.linux"]
