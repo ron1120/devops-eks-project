@@ -1,21 +1,16 @@
-import subprocess
-import sys
 import os
 import time
 import signal
+import subprocess
 import platform
 import requests
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ENGINE_DIR = os.path.join(BASE_DIR, "engine")
-CLI_SCRIPT = os.path.join(BASE_DIR, "cli", "sawectl.py")
-MODULES_DIR = os.path.join(BASE_DIR, "engine", "modules")
-SAMPLES_DIR = os.path.join(BASE_DIR, "engine", "workflows", "samples")
 
 BINARY_NAME = "seyoawe.linux" if platform.system() == "Linux" else "seyoawe.macos.arm"
 ENGINE_BIN = os.path.join(ENGINE_DIR, BINARY_NAME)
 
-# When ENGINE_URL is set externally (CI), skip local engine lifecycle management
 EXTERNAL_ENGINE = "ENGINE_URL" in os.environ
 ENGINE_URL = os.environ.get("ENGINE_URL", "http://localhost:8080")
 ENGINE_ADHOC = f"{ENGINE_URL}/api/adhoc"
@@ -46,15 +41,8 @@ def stop_engine(proc):
         proc.kill()
 
 
-def run_cli(*args):
-    return subprocess.run(
-        [sys.executable, CLI_SCRIPT, *args],
-        capture_output=True, text=True
-    )
-
-
-class TestE2EEngineIsReachable:
-    """E2E: Verify the CLI can interact with a running engine."""
+class TestEngine:
+    """E2E: Verify the engine is reachable and responds correctly."""
 
     @classmethod
     def setup_class(cls):
@@ -75,21 +63,3 @@ class TestE2EEngineIsReachable:
     def test_engine_adhoc_endpoint_exists(self):
         resp = requests.post(ENGINE_ADHOC, json={"workflow": {}}, timeout=3)
         assert resp.status_code != 405, "POST /api/adhoc returned Method Not Allowed"
-
-    def test_cli_validates_before_sending(self):
-        workflow = os.path.join(SAMPLES_DIR, "command_and_slack.yaml")
-        result = run_cli("validate-workflow", "--workflow", workflow, "--modules", MODULES_DIR)
-        assert result.returncode == 0
-        assert "VALIDATION PASSED" in result.stdout
-
-    def test_cli_run_triggers_workflow(self):
-        workflow = os.path.join(SAMPLES_DIR, "command_and_slack.yaml")
-        server = ENGINE_URL.replace("http://", "").replace("https://", "")
-        result = run_cli("run", "--workflow", workflow, "--server", server)
-        assert "triggered" in result.stdout.lower() or "error" in result.stdout.lower()
-
-    def test_cli_run_bad_server_fails(self):
-        workflow = os.path.join(SAMPLES_DIR, "command_and_slack.yaml")
-        result = run_cli("run", "--workflow", workflow, "--server", "localhost:9999")
-        assert result.returncode != 0
-        assert "error" in result.stdout.lower() or "error" in result.stderr.lower()

@@ -60,9 +60,8 @@ pipeline {
                         echo "Changed files:\n${changes}"
                         env.ENGINE_CHANGED = (
                             changes.contains('engine/') ||
-                            changes.contains('tests/engine/') ||
                             changes.contains('modules/') ||
-                            changes.contains('docker/Dockerfile.engine_prod') ||
+                            changes.contains('docker/Dockerfile.engine') ||
                             changes.contains('docker/Dockerfile.engine_test') ||
                             changes.contains('jenkins/Jenkinsfile.engine') ||
                             changes.contains('VERSION')
@@ -84,7 +83,7 @@ pipeline {
                     . ${env.VENV_DIR}/bin/activate
                     pip install --upgrade pip
                     pip install -r engine/requirements.txt
-                    pip install pytest pyyaml pylint
+                    pip install pytest pyyaml pylint requests
                     mkdir -p reports
                 """
             }
@@ -110,7 +109,7 @@ pipeline {
             steps {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
-                    pytest tests/engine/unit/ -v --tb=short --junitxml=reports/engine-unit.xml
+                    pytest engine/tests-engine/unit/ -v --tb=short --junitxml=reports/engine-unit.xml
                 """
             }
             post {
@@ -123,7 +122,7 @@ pipeline {
             steps {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
-                    pytest tests/engine/integration/ -v --tb=short --junitxml=reports/engine-integration.xml
+                    pytest engine/tests-engine/integration/ -v --tb=short --junitxml=reports/engine-integration.xml
                 """
             }
             post {
@@ -131,11 +130,49 @@ pipeline {
             }
         }
 
+        stage('E2E Tests') {
+            when { environment name: 'ENGINE_CHANGED', value: 'true' }
+            steps {
+                sh """
+                    . ${env.VENV_DIR}/bin/activate
+                    docker build -f docker/Dockerfile.engine \
+                        --build-arg VERSION=${env.SEM_VERSION} \
+                        -t engine-e2e-img-${env.BUILD_NUMBER} .
+                    docker run -d -P --name engine-e2e-${env.BUILD_NUMBER} engine-e2e-img-${env.BUILD_NUMBER}
+                    ENGINE_HOST=172.17.0.1
+                    if command -v getent >/dev/null 2>&1 && getent hosts host.docker.internal >/dev/null 2>&1; then
+                        ENGINE_HOST=host.docker.internal
+                    fi
+                    ENGINE_PORT=\$(docker port engine-e2e-${env.BUILD_NUMBER} 8080 | head -1 | sed 's/.*://')
+                    ENGINE_URL="http://\${ENGINE_HOST}:\${ENGINE_PORT}"
+                    echo "E2E engine URL: \${ENGINE_URL}"
+                    ready=0
+                    for i in \$(seq 1 30); do
+                        if curl -sf "\${ENGINE_URL}/" >/dev/null 2>&1; then ready=1; break; fi
+                        sleep 2
+                    done
+                    if [ "\$ready" != 1 ]; then
+                        echo "Engine did not become ready at \${ENGINE_URL}"
+                        docker logs engine-e2e-${env.BUILD_NUMBER} 2>&1 | tail -n 80 || true
+                        exit 1
+                    fi
+                    ENGINE_URL=\${ENGINE_URL} pytest engine/tests-engine/e2e/ -v --tb=short --junitxml=reports/engine-e2e.xml
+                """
+            }
+            post {
+                always {
+                    sh "docker stop engine-e2e-${env.BUILD_NUMBER} || true && docker rm engine-e2e-${env.BUILD_NUMBER} || true"
+                    sh "docker rmi engine-e2e-img-${env.BUILD_NUMBER} || true"
+                    junit allowEmptyResults: true, testResults: 'reports/engine-e2e.xml'
+                }
+            }
+        }
+
         stage('Docker Build') {
             when { environment name: 'ENGINE_CHANGED', value: 'true' }
             steps {
                 sh """
-                    docker build -f docker/Dockerfile.engine_prod \
+                    docker build -f docker/Dockerfile.engine \
                         --build-arg VERSION=${env.SEM_VERSION} \
                         -t ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} \
                         -t ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} \

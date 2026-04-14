@@ -10,12 +10,12 @@ WORKDIR /workspace
 
 COPY cli/ cli/
 COPY engine/ engine/
-COPY tests/cli/ tests/cli/
+COPY cli/tests-cli/ cli/tests-cli/
 COPY VERSION .
 
 RUN pip install --no-cache-dir -r cli/requirements.txt pytest
 
-RUN pytest tests/cli/ -v --tb=short
+RUN pytest cli/tests-cli/ -v --tb=short
 
 # ---------- Stage 2: Production ----------
 FROM python:3.12-slim AS production

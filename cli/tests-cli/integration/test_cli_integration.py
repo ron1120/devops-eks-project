@@ -3,7 +3,7 @@ import os
 import sys
 import shutil
 
-# Base paths — go up from tests/cli/integration/ to the project root
+# Base paths — go up from cli/tests-cli/integration/ to the project root
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 CLI_SCRIPT = os.path.join(BASE_DIR, "cli", "sawectl.py")
 MODULES_DIR = os.path.join(BASE_DIR, "engine", "modules")

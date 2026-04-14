@@ -5,7 +5,7 @@ WORKDIR /workspace
 
 # Copy exactly how the test expects the structure
 COPY engine/ engine/
-COPY tests/engine/ tests/engine/
+COPY engine/tests-engine/ engine/tests-engine/
 
 # Install system dependencies and Python requirements
 RUN apt update && apt install -y curl git
@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r engine/requirements.txt pytest pyyaml
 RUN chmod +x engine/run.sh engine/seyoawe.linux engine/seyoawe.macos.arm
 
 # Run both unit and integration tests
-CMD ["pytest", "tests/engine/", "-v"]
+CMD ["pytest", "engine/tests-engine/", "-v"]
 
 
 ### Build engine_test locally:

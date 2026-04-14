@@ -84,6 +84,17 @@
           - /var/run/docker.sock:/var/run/docker.sock
         env:
           AWS_REGION: "us-east-1"
+          JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"
+
+    # ── Jenkins Plugins ──
+    - name: Install Jenkins plugins
+      command: >
+        docker exec {{ container_name }}
+        jenkins-plugin-cli --plugins
+        workflow-aggregator git github docker-workflow
+        credentials credentials-binding junit timestamper
+        pipeline-stage-view
+      changed_when: true
 
     # ── Jenkins Container Dependencies ──
     - name: Install Python inside Jenkins container
@@ -128,6 +139,25 @@
         path: "{{ jenkins_home }}/init.groovy.d"
         state: directory
         mode: "0755"
+
+    - name: Deploy admin user creation script
+      copy:
+        dest: "{{ jenkins_home }}/init.groovy.d/create-admin.groovy"
+        mode: "0644"
+        content: |
+          import jenkins.model.*
+          import hudson.security.*
+
+          def instance = Jenkins.getInstance()
+          def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+          hudsonRealm.createAccount("{{ jenkins_admin_user }}", "{{ jenkins_admin_password }}")
+          instance.setSecurityRealm(hudsonRealm)
+
+          def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+          strategy.setAllowAnonymousRead(false)
+          instance.setAuthorizationStrategy(strategy)
+          instance.save()
+          println("[Jenkins Init] Admin user '{{ jenkins_admin_user }}' created")
 
     - name: Deploy Secrets Manager credentials sync script
       copy:

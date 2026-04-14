@@ -63,11 +63,9 @@ pipeline {
                         echo "Changed files:\n${changes}"
                         env.CLI_CHANGED = (
                             changes.contains('cli/') ||
-                            changes.contains('tests/cli/') ||
-                            changes.contains('tests/e2e/') ||
                             changes.contains('engine/modules/') ||
                             changes.contains('engine/workflows/') ||
-                            changes.contains('docker/Dockerfile.cli_prod') ||
+                            changes.contains('docker/Dockerfile.cli') ||
                             changes.contains('docker/Dockerfile.cli_test') ||
                             changes.contains('jenkins/Jenkinsfile.cli') ||
                             changes.contains('VERSION')
@@ -89,7 +87,7 @@ pipeline {
                     . ${env.VENV_DIR}/bin/activate
                     pip install --upgrade pip
                     pip install -r cli/requirements.txt
-                    pip install pytest pylint
+                    pip install pytest pylint requests
                     mkdir -p reports dist
                 """
             }
@@ -112,7 +110,7 @@ pipeline {
             steps {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
-                    pytest tests/cli/unit/ -v --tb=short --junitxml=reports/cli-unit.xml
+                    pytest cli/tests-cli/unit/ -v --tb=short --junitxml=reports/cli-unit.xml
                 """
             }
             post {
@@ -125,7 +123,7 @@ pipeline {
             steps {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
-                    pytest tests/cli/integration/ -v --tb=short --junitxml=reports/cli-integration.xml
+                    pytest cli/tests-cli/integration/ -v --tb=short --junitxml=reports/cli-integration.xml
                 """
             }
             post {
@@ -139,12 +137,28 @@ pipeline {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
                     docker pull ${env.ENGINE_IMAGE}
-                    docker run -d --name engine-e2e-${env.BUILD_NUMBER} ${env.ENGINE_IMAGE}
-                    ENGINE_IP=\$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' engine-e2e-${env.BUILD_NUMBER})
-                    for i in \$(seq 1 15); do
-                        curl -sf http://\$ENGINE_IP:8080/ >/dev/null 2>&1 && break || sleep 2
+                    # Publish 8080 to the Docker host. Container bridge IPs (e.g. 172.17.0.x) are not
+                    # reachable from a Jenkins controller running inside another container; use host
+                    # gateway + mapped port instead (Linux bridge: 172.17.0.1, Desktop: host.docker.internal).
+                    docker run -d -P --name engine-e2e-${env.BUILD_NUMBER} ${env.ENGINE_IMAGE}
+                    ENGINE_HOST=172.17.0.1
+                    if command -v getent >/dev/null 2>&1 && getent hosts host.docker.internal >/dev/null 2>&1; then
+                        ENGINE_HOST=host.docker.internal
+                    fi
+                    ENGINE_PORT=\$(docker port engine-e2e-${env.BUILD_NUMBER} 8080 | head -1 | sed 's/.*://')
+                    ENGINE_URL="http://\${ENGINE_HOST}:\${ENGINE_PORT}"
+                    echo "E2E engine URL: \${ENGINE_URL}"
+                    ready=0
+                    for i in \$(seq 1 30); do
+                        if curl -sf "\${ENGINE_URL}/" >/dev/null 2>&1; then ready=1; break; fi
+                        sleep 2
                     done
-                    ENGINE_URL=http://\$ENGINE_IP:8080 pytest tests/e2e/ -v --tb=short --junitxml=reports/cli-e2e.xml
+                    if [ "\$ready" != 1 ]; then
+                        echo "Engine did not become ready at \${ENGINE_URL}"
+                        docker logs engine-e2e-${env.BUILD_NUMBER} 2>&1 | tail -n 80 || true
+                        exit 1
+                    fi
+                    ENGINE_URL=\${ENGINE_URL} pytest cli/tests-cli/e2e/ -v --tb=short --junitxml=reports/cli-e2e.xml
                 """
             }
             post {
@@ -180,7 +194,7 @@ pipeline {
             when { environment name: 'CLI_CHANGED', value: 'true' }
             steps {
                 sh """
-                    docker build -f docker/Dockerfile.cli_prod \
+                    docker build -f docker/Dockerfile.cli \
                         --build-arg VERSION=${env.SEM_VERSION} \
                         -t ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} \
                         -t ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} \

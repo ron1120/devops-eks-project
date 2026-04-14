@@ -7,13 +7,13 @@ WORKDIR /workspace
 COPY cli/ cli/
 COPY engine/modules/ engine/modules/
 COPY engine/workflows/ engine/workflows/
-COPY tests/cli/ tests/cli/
+COPY cli/tests-cli/ cli/tests-cli/
 
 # Install the CLI requirements and pytest
 RUN pip install --no-cache-dir -r cli/requirements.txt pytest
 
 # Run both unit and integration tests
-CMD ["pytest", "tests/cli/", "-v"]
+CMD ["pytest", "cli/tests-cli/", "-v"]
 
 
 ### Can simply access locally the cli using:

@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-# Go up from tests/engine/unit/ to the project root
+# Go up from engine/tests-engine/unit/ to the project root
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ENGINE_DIR = os.path.join(BASE_DIR, "engine")
 RUN_SCRIPT = os.path.join(ENGINE_DIR, "run.sh")

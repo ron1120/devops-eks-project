@@ -1,7 +1,7 @@
 import os
 import yaml
 
-# Base paths — go up from tests/engine/integration/ to the project root
+# Base paths — go up from engine/tests-engine/integration/ to the project root
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ENGINE_DIR = os.path.join(BASE_DIR, "engine")
 ENGINE_MODULES = os.path.join(ENGINE_DIR, "modules")

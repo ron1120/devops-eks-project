@@ -171,8 +171,9 @@ resource "aws_iam_instance_profile" "jenkins" {
 
 # Secrets Manager
 resource "aws_secretsmanager_secret" "dockerhub_credentials" {
-  name        = "DockerHubCredentials"
-  description = "Docker Hub username and password/token for Jenkins"
+  name                    = "DockerHubCredentials"
+  description             = "Docker Hub username and password/token for Jenkins"
+  recovery_window_in_days = 0
 
   tags = {
     Name                        = "${var.project_name}-dockerhub-creds"
@@ -181,8 +182,9 @@ resource "aws_secretsmanager_secret" "dockerhub_credentials" {
 }
 
 resource "aws_secretsmanager_secret" "git_credentials" {
-  name        = "RonGitUser"
-  description = "GitHub username and PAT for Jenkins"
+  name                    = "RonGitUser"
+  description             = "GitHub username and PAT for Jenkins"
+  recovery_window_in_days = 0
 
   tags = {
     Name                        = "${var.project_name}-git-creds"
@@ -253,8 +255,22 @@ variable "existing_vpc_id" {
   default     = ""
 }
 
-# Elastic IP
+# Elastic IP — reuse existing if found by Name tag, otherwise create
+data "aws_eips" "existing" {
+  filter {
+    name   = "tag:Name"
+    values = ["${var.project_name}-eip"]
+  }
+}
+
+locals {
+  eip_exists        = length(data.aws_eips.existing.allocation_ids) > 0
+  eip_allocation_id = local.eip_exists ? data.aws_eips.existing.allocation_ids[0] : aws_eip.jenkins[0].id
+  eip_public_ip     = local.eip_exists ? data.aws_eips.existing.public_ips[0] : aws_eip.jenkins[0].public_ip
+}
+
 resource "aws_eip" "jenkins" {
+  count  = local.eip_exists ? 0 : 1
   domain = "vpc"
 
   tags = {
@@ -264,12 +280,12 @@ resource "aws_eip" "jenkins" {
 
 resource "aws_eip_association" "jenkins" {
   instance_id   = aws_instance.app.id
-  allocation_id = aws_eip.jenkins.id
+  allocation_id = local.eip_allocation_id
 }
 
 # Outputs
 output "instance_public_ip" {
-  value = aws_eip.jenkins.public_ip
+  value = local.eip_public_ip
 }
 
 output "vpc_id" {
