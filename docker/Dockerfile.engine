@@ -16,7 +16,7 @@ COPY VERSION .
 RUN apt-get update && apt-get install -y --no-install-recommends curl git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir -r engine/requirements.txt pytest pyyaml
+RUN pip install --no-cache-dir -r engine/requirements.txt
 
 RUN chmod +x engine/run.sh engine/seyoawe.linux
 

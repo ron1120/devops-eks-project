@@ -2,3 +2,5 @@ pyyaml
 jsonschema
 requests
 argparse
+pytest
+pylint

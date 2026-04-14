@@ -9,7 +9,7 @@ COPY engine/tests-engine/ engine/tests-engine/
 
 # Install system dependencies and Python requirements
 RUN apt update && apt install -y curl git
-RUN pip install --no-cache-dir -r engine/requirements.txt pytest pyyaml
+RUN pip install --no-cache-dir -r engine/requirements.txt
 
 # Make scripts executable
 RUN chmod +x engine/run.sh engine/seyoawe.linux engine/seyoawe.macos.arm

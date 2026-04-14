@@ -87,7 +87,6 @@ pipeline {
                     . ${env.VENV_DIR}/bin/activate
                     pip install --upgrade pip
                     pip install -r cli/requirements.txt
-                    pip install pytest pylint requests
                     mkdir -p reports dist
                 """
             }

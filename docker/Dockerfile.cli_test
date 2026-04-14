@@ -10,7 +10,7 @@ COPY engine/workflows/ engine/workflows/
 COPY cli/tests-cli/ cli/tests-cli/
 
 # Install the CLI requirements and pytest
-RUN pip install --no-cache-dir -r cli/requirements.txt pytest
+RUN pip install --no-cache-dir -r cli/requirements.txt
 
 # Run both unit and integration tests
 CMD ["pytest", "cli/tests-cli/", "-v"]
