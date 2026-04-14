@@ -159,7 +159,8 @@ pipeline {
                             docker logs engine-e2e-${env.BUILD_NUMBER} 2>&1 | tail -n 80 || true
                             exit 1
                         fi
-                        code=\$(curl -sS -o /dev/null -w '%{http_code}' "\${ENGINE_URL}/" || echo 000)
+                        code=\$(curl -sS -o /dev/null -w '%{http_code}' "\${ENGINE_URL}/" || true)
+                        [ -z "\$code" ] && code=000
                         if [ "\$code" = 200 ] || [ "\$code" = 404 ]; then ready=1; break; fi
                         sleep 2
                     done

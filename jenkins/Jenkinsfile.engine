@@ -137,7 +137,9 @@ pipeline {
                     # E2E: same as CLI — pull published :latest from Docker Hub and run it (not a local build).
                     docker pull ${env.DOCKERHUB_REPO}:latest
                     docker image inspect ${env.DOCKERHUB_REPO}:latest --format 'E2E engine image id={{.Id}}'
-                    docker run -d -P --name engine-e2e-${env.BUILD_NUMBER} ${env.DOCKERHUB_REPO}:latest
+                    # Published image may run as non-root while the onefile still mkdirs under cwd → PermissionError.
+                    # Run as root for E2E only (matches Jenkinsfile.cli); rebuild/push engine image after Dockerfile chown for a stricter setup.
+                    docker run -d -P --user root --name engine-e2e-${env.BUILD_NUMBER} ${env.DOCKERHUB_REPO}:latest
                     ENGINE_HOST=172.17.0.1
                     if command -v getent >/dev/null 2>&1 && getent hosts host.docker.internal >/dev/null 2>&1; then
                         ENGINE_HOST=host.docker.internal
@@ -153,7 +155,8 @@ pipeline {
                             docker logs engine-e2e-${env.BUILD_NUMBER} 2>&1 | tail -n 80 || true
                             exit 1
                         fi
-                        code=\$(curl -sS -o /dev/null -w '%{http_code}' "\${ENGINE_URL}/" || echo 000)
+                        code=\$(curl -sS -o /dev/null -w '%{http_code}' "\${ENGINE_URL}/" || true)
+                        [ -z "\$code" ] && code=000
                         if [ "\$code" = 200 ] || [ "\$code" = 404 ]; then ready=1; break; fi
                         sleep 2
                     done
