@@ -141,7 +141,9 @@ pipeline {
                     # Publish 8080 to the Docker host. Container bridge IPs (e.g. 172.17.0.x) are not
                     # reachable from a Jenkins controller running inside another container; use host
                     # gateway + mapped port instead (Linux bridge: 172.17.0.1, Desktop: host.docker.internal).
-                    docker run -d -P --name engine-e2e-${env.BUILD_NUMBER} ${env.ENGINE_IMAGE}
+                    # Published image runs as non-root but /app is root-owned → PermissionError on ./seyoawe-community.
+                    # Run as root for E2E only until the engine image includes chown for that user (see Dockerfile.engine).
+                    docker run -d -P --user root --name engine-e2e-${env.BUILD_NUMBER} ${env.ENGINE_IMAGE}
                     ENGINE_HOST=172.17.0.1
                     if command -v getent >/dev/null 2>&1 && getent hosts host.docker.internal >/dev/null 2>&1; then
                         ENGINE_HOST=host.docker.internal
