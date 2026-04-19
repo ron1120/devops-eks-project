@@ -9,11 +9,12 @@ pipeline {
     }
 
     environment {
-        GIT_REPO     = 'https://github.com/ron1120/devops-eks-project.git'
-        AWS_REGION   = 'us-east-1'
-        DOCKERHUB_REPO  = 'ronsss/sawe-cli'
-        ENGINE_IMAGE    = 'ronsss/sawe-engine:latest'
-        VENV_DIR        = 'venv'
+        GIT_REPO       = 'https://github.com/ron1120/devops-eks-project.git'
+        // AWS on the agent must allow secretsmanager:GetSecretValue for these secrets (see terraform / configure-env).
+        AWS_REGION     = 'us-east-1'
+        DOCKERHUB_REPO = 'ronsss/sawe-cli'
+        ENGINE_IMAGE   = 'ronsss/sawe-engine:latest'
+        VENV_DIR       = 'venv'
     }
 
     triggers { githubPush() }
@@ -138,7 +139,7 @@ pipeline {
             steps {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
-                    # E2E: always use a fresh pull of the published engine image, then run it for pytest.
+                    # Optional docker login when Hub creds live in Secrets Manager (private pulls).
                     set +x
                     SECRET=\$(aws secretsmanager get-secret-value --secret-id DockerHubCredentials --region ${env.AWS_REGION} --query SecretString --output text 2>/dev/null || true)
                     if [ -n "\$SECRET" ]; then

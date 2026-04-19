@@ -137,7 +137,6 @@ pipeline {
             steps {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
-                    # E2E: same as CLI — pull published :latest from Docker Hub and run it (not a local build).
                     set +x
                     SECRET=\$(aws secretsmanager get-secret-value --secret-id DockerHubCredentials --region ${env.AWS_REGION} --query SecretString --output text 2>/dev/null || true)
                     if [ -n "\$SECRET" ]; then
