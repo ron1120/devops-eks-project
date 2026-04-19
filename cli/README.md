@@ -148,5 +148,4 @@ See the full platform docs at:
 Creator of SeyoAWE
 yuri.bernstein@gmail.com
 
----
-
+---.
