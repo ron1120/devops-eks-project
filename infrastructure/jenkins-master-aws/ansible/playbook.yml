@@ -1,14 +1,38 @@
 ---
+# Jenkins needs several GB free on the root volume (plugins, updates, Docker layers).
+# If free space falls near ~1 GiB, the built-in node may go offline and the UI can break.
 - name: Configure EC2 and deploy Jenkins
   hosts: app
   become: true
 
   vars:
-    docker_image: "jenkins/jenkins:lts"
+    jenkins_docker_repo: "jenkins/jenkins"
+    # Bump intentionally. For an exact pin, set jenkins_docker_digest (sha256:...) and re-run.
+    jenkins_docker_tag: "lts-jdk21"
+    jenkins_docker_digest: ""
     container_name: "jenkins"
     jenkins_home: "/var/lib/docker/volumes/jenkins_home/_data"
     jenkins_admin_user: "admin"
     jenkins_admin_password: "admin"
+    # Job definitions only. Pipelines use AWS (Secrets Manager + IAM on the Jenkins host) for Docker Hub and Git tag; SCM has no Jenkins credential if repo is public.
+    jenkins_cli_ci_repo: "https://github.com/ron1120/devops-eks-project.git"
+    jenkins_cli_ci_branch: "*/main"
+    jenkins_cli_ci_git_credentials: ""
+    jenkins_cli_ci_jenkinsfile: "jenkins/Jenkinsfile.cli"
+    jenkins_engine_ci_repo: "https://github.com/ron1120/devops-eks-project.git"
+    jenkins_engine_ci_branch: "*/main"
+    jenkins_engine_ci_git_credentials: ""
+    jenkins_engine_ci_jenkinsfile: "jenkins/Jenkinsfile.engine"
+
+  pre_tasks:
+    - name: Resolve Jenkins container image reference
+      ansible.builtin.set_fact:
+        docker_image: >-
+          {{
+            (jenkins_docker_repo ~ '@' ~ (jenkins_docker_digest | trim))
+            if (jenkins_docker_digest | default('') | trim | length) > 0
+            else (jenkins_docker_repo ~ ':' ~ jenkins_docker_tag)
+          }}
 
   tasks:
     # ── System Updates ──
@@ -93,7 +117,7 @@
         jenkins-plugin-cli --plugins
         workflow-aggregator git github docker-workflow
         credentials credentials-binding junit timestamper
-        pipeline-stage-view
+        pipeline-stage-view ws-cleanup
       changed_when: true
 
     # ── Jenkins Container Dependencies ──
@@ -140,6 +164,15 @@
         state: directory
         mode: "0755"
 
+    - name: Remove deprecated credential bootstrap files (Git/Docker use AWS Secrets Manager in pipelines)
+      ansible.builtin.file:
+        path: "{{ jenkins_home }}/{{ item }}"
+        state: absent
+      loop:
+        - "jenkins-bootstrap.env"
+        - "init.groovy.d/00-bootstrap-credentials-from-env.groovy"
+        - "init.groovy.d/aws-secrets.groovy"
+
     - name: Deploy admin user creation script
       copy:
         dest: "{{ jenkins_home }}/init.groovy.d/create-admin.groovy"
@@ -159,49 +192,127 @@
           instance.save()
           println("[Jenkins Init] Admin user '{{ jenkins_admin_user }}' created")
 
-    - name: Deploy Secrets Manager credentials sync script
+    - name: Deploy cli-ci pipeline job (SCM + cli/ path filter)
       copy:
-        dest: "{{ jenkins_home }}/init.groovy.d/aws-secrets.groovy"
+        dest: "{{ jenkins_home }}/init.groovy.d/zzz-cli-ci-job.groovy"
         mode: "0644"
         content: |
-          import com.cloudbees.plugins.credentials.*
-          import com.cloudbees.plugins.credentials.domains.*
-          import com.cloudbees.plugins.credentials.impl.*
-          import groovy.json.JsonSlurper
+          import jenkins.model.Jenkins
+          import org.jenkinsci.plugins.workflow.job.WorkflowJob
+          import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
+          import org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty
+          import hudson.plugins.git.GitSCM
+          import hudson.plugins.git.BranchSpec
+          import hudson.plugins.git.UserRemoteConfig
+          import hudson.plugins.git.extensions.impl.PathRestriction
+          import hudson.triggers.SCMTrigger
 
-          def fetchSecret(String secretId) {
-              def awsRegion = System.getenv("AWS_REGION") ?: "us-east-1"
-              def cmd = ["aws", "secretsmanager", "get-secret-value",
-                         "--secret-id", secretId, "--region", awsRegion,
-                         "--query", "SecretString", "--output", "text"]
-              def proc = cmd.execute()
-              proc.waitFor()
-              if (proc.exitValue() == 0) {
-                  return new JsonSlurper().parseText(proc.text.trim())
-              }
-              println("[AWS Secrets] Failed to fetch ${secretId}: ${proc.err.text}")
-              return null
+          def jenkins = Jenkins.instance
+          def jobName = "cli-ci"
+
+          WorkflowJob job = jenkins.getItem(jobName) as WorkflowJob
+          if (job == null) {
+              job = jenkins.createProject(WorkflowJob, jobName)
           }
 
-          def createOrUpdate(String id, String user, String pass) {
-              def store = SystemCredentialsProvider.getInstance().getStore()
-              def domain = Domain.global()
-              SystemCredentialsProvider.getInstance().getCredentials().findAll { it.id == id }.each {
-                  store.removeCredentials(domain, it)
-              }
-              store.addCredentials(domain, new UsernamePasswordCredentialsImpl(
-                  CredentialsScope.GLOBAL, id, "From AWS Secrets Manager", user, pass
-              ))
-              println("[AWS Secrets] Credential '${id}' ready")
+          def remotes = [
+              new UserRemoteConfig(
+                  "{{ jenkins_cli_ci_repo }}",
+                  "origin",
+                  "",
+                  "{{ jenkins_cli_ci_git_credentials }}"
+              )
+          ]
+          def branches = [new BranchSpec("{{ jenkins_cli_ci_branch }}")]
+          def extensions = [new PathRestriction("^cli/.*", "")]
+
+          def scm = new GitSCM(
+              remotes,
+              branches,
+              false,
+              [],
+              null,
+              null,
+              extensions
+          )
+
+          job.setDefinition(new CpsScmFlowDefinition(scm, "{{ jenkins_cli_ci_jenkinsfile }}"))
+
+          def triggers = []
+          triggers.add(new SCMTrigger("H/5 * * * *"))
+          try {
+              def pushTriggerClass = Class.forName("com.cloudbees.jenkins.GitHubPushTrigger")
+              triggers.add(pushTriggerClass.getDeclaredConstructor().newInstance())
+          } catch (Throwable t) {
+              println("[Jenkins Init] GitHubPushTrigger not available, using SCM polling only: " + t.message)
           }
 
-          println("[AWS Secrets] Syncing credentials from AWS Secrets Manager...")
-          ["DockerHubCredentials", "RonGitUser"].each { secretId ->
-              def secret = fetchSecret(secretId)
-              if (secret) {
-                  createOrUpdate(secretId, secret.username, secret.password)
-              }
+          job.removeProperty(PipelineTriggersJobProperty)
+          job.addProperty(new PipelineTriggersJobProperty(triggers))
+
+          job.save()
+          println("[Jenkins Init] Pipeline job '${jobName}' configured (SCM + included region ^cli/.*)")
+
+    - name: Deploy engine-ci pipeline job (SCM + engine/ path filter)
+      copy:
+        dest: "{{ jenkins_home }}/init.groovy.d/zzz-engine-ci-job.groovy"
+        mode: "0644"
+        content: |
+          import jenkins.model.Jenkins
+          import org.jenkinsci.plugins.workflow.job.WorkflowJob
+          import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
+          import org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty
+          import hudson.plugins.git.GitSCM
+          import hudson.plugins.git.BranchSpec
+          import hudson.plugins.git.UserRemoteConfig
+          import hudson.plugins.git.extensions.impl.PathRestriction
+          import hudson.triggers.SCMTrigger
+
+          def jenkins = Jenkins.instance
+          def jobName = "engine-ci"
+
+          WorkflowJob job = jenkins.getItem(jobName) as WorkflowJob
+          if (job == null) {
+              job = jenkins.createProject(WorkflowJob, jobName)
           }
+
+          def remotes = [
+              new UserRemoteConfig(
+                  "{{ jenkins_engine_ci_repo }}",
+                  "origin",
+                  "",
+                  "{{ jenkins_engine_ci_git_credentials }}"
+              )
+          ]
+          def branches = [new BranchSpec("{{ jenkins_engine_ci_branch }}")]
+          def extensions = [new PathRestriction("^engine/.*", "")]
+
+          def scm = new GitSCM(
+              remotes,
+              branches,
+              false,
+              [],
+              null,
+              null,
+              extensions
+          )
+
+          job.setDefinition(new CpsScmFlowDefinition(scm, "{{ jenkins_engine_ci_jenkinsfile }}"))
+
+          def triggers = []
+          triggers.add(new SCMTrigger("H/5 * * * *"))
+          try {
+              def pushTriggerClass = Class.forName("com.cloudbees.jenkins.GitHubPushTrigger")
+              triggers.add(pushTriggerClass.getDeclaredConstructor().newInstance())
+          } catch (Throwable t) {
+              println("[Jenkins Init] GitHubPushTrigger not available, using SCM polling only: " + t.message)
+          }
+
+          job.removeProperty(PipelineTriggersJobProperty)
+          job.addProperty(new PipelineTriggersJobProperty(triggers))
+
+          job.save()
+          println("[Jenkins Init] Pipeline job '${jobName}' configured (SCM + included region ^engine/.*)")
 
     - name: Restart Jenkins container to pick up changes
       docker_container:

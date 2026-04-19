@@ -1,0 +1,9 @@
+# Image tag is overridden by Jenkins CD (writeFile) to match VERSION / SEM_VERSION.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: seyoawe
+resources:
+  - ../../base
+images:
+  - name: ronsss/sawe-engine
+    newTag: latest

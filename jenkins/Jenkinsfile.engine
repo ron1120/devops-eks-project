@@ -9,10 +9,10 @@ pipeline {
     }
 
     environment {
-        GIT_REPO        = 'https://github.com/ron1120/devops-eks-project.git'
-        GIT_CREDENTIALS = 'RonGitUser'
-        DOCKERHUB_REPO  = 'ronsss/sawe-engine'
-        VENV_DIR        = 'venv'
+        GIT_REPO       = 'https://github.com/ron1120/devops-eks-project.git'
+        AWS_REGION     = 'us-east-1'
+        DOCKERHUB_REPO = 'ronsss/sawe-engine'
+        VENV_DIR       = 'venv'
     }
 
     triggers { githubPush() }
@@ -22,13 +22,16 @@ pipeline {
         stage('Checkout') {
             steps {
                 script {
-                    git branch: 'main', credentialsId: env.GIT_CREDENTIALS, url: env.GIT_REPO
+                    git branch: 'main', url: env.GIT_REPO
 
                     env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     env.GIT_BRANCH_NAME  = sh(script: 'git rev-parse --abbrev-ref HEAD || echo main', returnStdout: true).trim()
                     if (env.GIT_BRANCH_NAME == 'HEAD') { env.GIT_BRANCH_NAME = 'main' }
 
-                    echo "Branch: ${env.GIT_BRANCH_NAME}  Commit: ${env.GIT_COMMIT_SHORT}"
+                    def jobSlug = env.JOB_NAME.replaceAll('/', '-').replaceAll('[^a-zA-Z0-9_.-]', '_')
+                    env.E2E_ENGINE_CONTAINER = "${jobSlug}-engine-e2e-${env.BUILD_NUMBER}"
+
+                    echo "Branch: ${env.GIT_BRANCH_NAME}  Commit: ${env.GIT_COMMIT_SHORT}  E2E container: ${env.E2E_ENGINE_CONTAINER}"
                 }
             }
         }
@@ -135,24 +138,33 @@ pipeline {
                 sh """
                     . ${env.VENV_DIR}/bin/activate
                     # E2E: same as CLI — pull published :latest from Docker Hub and run it (not a local build).
+                    set +x
+                    SECRET=\$(aws secretsmanager get-secret-value --secret-id DockerHubCredentials --region ${env.AWS_REGION} --query SecretString --output text 2>/dev/null || true)
+                    if [ -n "\$SECRET" ]; then
+                        DOCKER_USER=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
+                        DOCKER_PASS=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+                        echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
+                    fi
+                    set -x
                     docker pull ${env.DOCKERHUB_REPO}:latest
                     docker image inspect ${env.DOCKERHUB_REPO}:latest --format 'E2E engine image id={{.Id}}'
                     # Published image may run as non-root while the onefile still mkdirs under cwd → PermissionError.
                     # Run as root for E2E only (matches Jenkinsfile.cli); rebuild/push engine image after Dockerfile chown for a stricter setup.
-                    docker run -d -P --user root --name engine-e2e-${env.BUILD_NUMBER} ${env.DOCKERHUB_REPO}:latest
+                    docker run -d -P --user root --name ${env.E2E_ENGINE_CONTAINER} ${env.DOCKERHUB_REPO}:latest
                     ENGINE_HOST=172.17.0.1
                     if command -v getent >/dev/null 2>&1 && getent hosts host.docker.internal >/dev/null 2>&1; then
                         ENGINE_HOST=host.docker.internal
                     fi
-                    ENGINE_PORT=\$(docker port engine-e2e-${env.BUILD_NUMBER} 8080 | head -1 | sed 's/.*://')
+                    ENGINE_PORT=\$(docker port ${env.E2E_ENGINE_CONTAINER} 8080 | head -1 | sed 's/.*://')
                     ENGINE_URL="http://\${ENGINE_HOST}:\${ENGINE_PORT}"
                     echo "E2E engine URL: \${ENGINE_URL}"
+                    sleep 3
                     ready=0
                     for i in \$(seq 1 30); do
-                        running=\$(docker inspect -f '{{.State.Running}}' engine-e2e-${env.BUILD_NUMBER} 2>/dev/null || echo false)
+                        running=\$(docker inspect -f '{{.State.Running}}' ${env.E2E_ENGINE_CONTAINER} 2>/dev/null || echo false)
                         if [ "\$running" != "true" ]; then
                             echo "Engine container stopped before becoming ready (check permissions / logs)"
-                            docker logs engine-e2e-${env.BUILD_NUMBER} 2>&1 | tail -n 80 || true
+                            docker logs ${env.E2E_ENGINE_CONTAINER} 2>&1 | tail -n 80 || true
                             exit 1
                         fi
                         code=\$(curl -sS -o /dev/null -w '%{http_code}' "\${ENGINE_URL}/" || true)
@@ -162,7 +174,7 @@ pipeline {
                     done
                     if [ "\$ready" != 1 ]; then
                         echo "Engine did not become ready at \${ENGINE_URL}"
-                        docker logs engine-e2e-${env.BUILD_NUMBER} 2>&1 | tail -n 80 || true
+                        docker logs ${env.E2E_ENGINE_CONTAINER} 2>&1 | tail -n 80 || true
                         exit 1
                     fi
                     ENGINE_URL=\${ENGINE_URL} pytest engine/tests-engine/e2e/ -v --tb=short --junitxml=reports/engine-e2e.xml
@@ -170,7 +182,7 @@ pipeline {
             }
             post {
                 always {
-                    sh "docker stop engine-e2e-${env.BUILD_NUMBER} || true && docker rm engine-e2e-${env.BUILD_NUMBER} || true"
+                    sh "docker stop ${env.E2E_ENGINE_CONTAINER} || true && docker rm ${env.E2E_ENGINE_CONTAINER} || true"
                     junit allowEmptyResults: true, testResults: 'reports/engine-e2e.xml'
                 }
             }
@@ -199,7 +211,7 @@ pipeline {
             steps {
                 sh """
                     set +x
-                    SECRET=\$(aws secretsmanager get-secret-value --secret-id DockerHubCredentials --region us-east-1 --query SecretString --output text)
+                    SECRET=\$(aws secretsmanager get-secret-value --secret-id DockerHubCredentials --region ${env.AWS_REGION} --query SecretString --output text)
                     DOCKER_USER=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
                     DOCKER_PASS=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
                     echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
@@ -207,7 +219,7 @@ pipeline {
                     docker push ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG}
                     docker push ${env.DOCKERHUB_REPO}:${env.BUILD_TAG}
                     docker push ${env.DOCKERHUB_REPO}:latest
-                    docker logout
+                    docker logout || true
                 """
             }
         }
