@@ -22,22 +22,14 @@ provider "aws" {
 provider "kubernetes" {
   host                   = aws_eks_cluster.eks.endpoint
   cluster_ca_certificate = base64decode(aws_eks_cluster.eks.certificate_authority[0].data)
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    args        = ["eks", "get-token", "--cluster-name", var.cluster_name]
-    command     = "aws"
-  }
+  token                  = data.aws_eks_cluster_auth.eks.token
 }
 
 provider "helm" {
   kubernetes {
     host                   = aws_eks_cluster.eks.endpoint
     cluster_ca_certificate = base64decode(aws_eks_cluster.eks.certificate_authority[0].data)
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      args        = ["eks", "get-token", "--cluster-name", var.cluster_name]
-      command     = "aws"
-    }
+    token                  = data.aws_eks_cluster_auth.eks.token
   }
 }
 
@@ -181,6 +173,11 @@ resource "aws_eks_cluster" "eks" {
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_policy
   ]
+}
+
+# Token for Kubernetes/Helm providers (same IAM identity as Terraform; no aws CLI exec).
+data "aws_eks_cluster_auth" "eks" {
+  name = aws_eks_cluster.eks.name
 }
 
 # --------- EKS Node Group ---------

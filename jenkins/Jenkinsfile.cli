@@ -13,6 +13,8 @@ pipeline {
         // AWS on the agent must allow secretsmanager:GetSecretValue for these secrets (see terraform / configure-env).
         AWS_REGION     = 'us-east-1'
         DOCKERHUB_REPO = 'ronsss/sawe-cli'
+        // Private ECR repo name (same account/region as AWS CLI on the agent).
+        ECR_REPO_NAME  = 'sawe-cli'
         ENGINE_IMAGE   = 'ronsss/sawe-engine:latest'
         VENV_DIR       = 'venv'
     }
@@ -227,7 +229,7 @@ pipeline {
             }
         }
 
-        stage('Push to Docker Hub') {
+        stage('Push to Docker Hub and ECR') {
             when {
                 allOf {
                     environment name: 'CLI_CHANGED', value: 'true'
@@ -246,6 +248,20 @@ pipeline {
                     docker push ${env.DOCKERHUB_REPO}:${env.BUILD_TAG}
                     docker push ${env.DOCKERHUB_REPO}:latest
                     docker logout || true
+                    # ECR (same tags; uses IAM on the agent — ecr:GetAuthorizationToken + push perms)
+                    unset AWS_PROFILE 2>/dev/null || true
+                    export AWS_PAGER=
+                    set +x
+                    ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${env.AWS_REGION})
+                    ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                    aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin "\${ECR_REGISTRY}"
+                    set -x
+                    docker tag ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
+                    docker tag ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.BUILD_TAG}
+                    docker tag ${env.DOCKERHUB_REPO}:latest \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:latest
+                    docker push \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
+                    docker push \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.BUILD_TAG}
+                    docker push \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:latest
                 """
             }
         }
@@ -281,6 +297,13 @@ pipeline {
             when { environment name: 'CLI_CHANGED', value: 'true' }
             steps {
                 sh """
+                    ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${env.AWS_REGION} 2>/dev/null || echo "")
+                    if [ -n "\$ACCOUNT_ID" ]; then
+                        ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                        docker rmi "\${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}" || true
+                        docker rmi "\${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.BUILD_TAG}" || true
+                        docker rmi "\${ECR_REGISTRY}/${env.ECR_REPO_NAME}:latest" || true
+                    fi
                     docker rmi ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} || true
                     docker rmi ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} || true
                     docker rmi ${env.DOCKERHUB_REPO}:latest || true

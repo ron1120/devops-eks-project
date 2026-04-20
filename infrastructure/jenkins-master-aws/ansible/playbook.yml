@@ -23,6 +23,10 @@
     jenkins_engine_ci_branch: "*/main"
     jenkins_engine_ci_git_credentials: ""
     jenkins_engine_ci_jenkinsfile: "jenkins/Jenkinsfile.engine"
+    jenkins_cd_repo: "https://github.com/ron1120/devops-eks-project.git"
+    jenkins_cd_branch: "*/main"
+    jenkins_cd_git_credentials: ""
+    jenkins_cd_jenkinsfile: "jenkins/Jenkinsfile.cd"
 
   pre_tasks:
     - name: Resolve Jenkins container image reference
@@ -313,6 +317,50 @@
 
           job.save()
           println("[Jenkins Init] Pipeline job '${jobName}' configured (SCM + included region ^engine/.*)")
+
+    - name: Deploy cd pipeline job (manual trigger)
+      copy:
+        dest: "{{ jenkins_home }}/init.groovy.d/zzz-cd-job.groovy"
+        mode: "0644"
+        content: |
+          import jenkins.model.Jenkins
+          import org.jenkinsci.plugins.workflow.job.WorkflowJob
+          import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
+          import hudson.plugins.git.GitSCM
+          import hudson.plugins.git.BranchSpec
+          import hudson.plugins.git.UserRemoteConfig
+
+          def jenkins = Jenkins.instance
+          def jobName = "cd"
+
+          WorkflowJob job = jenkins.getItem(jobName) as WorkflowJob
+          if (job == null) {
+              job = jenkins.createProject(WorkflowJob, jobName)
+          }
+
+          def remotes = [
+              new UserRemoteConfig(
+                  "{{ jenkins_cd_repo }}",
+                  "origin",
+                  "",
+                  "{{ jenkins_cd_git_credentials }}"
+              )
+          ]
+          def branches = [new BranchSpec("{{ jenkins_cd_branch }}")]
+
+          def scm = new GitSCM(
+              remotes,
+              branches,
+              false,
+              [],
+              null,
+              null,
+              []
+          )
+
+          job.setDefinition(new CpsScmFlowDefinition(scm, "{{ jenkins_cd_jenkinsfile }}"))
+          job.save()
+          println("[Jenkins Init] Pipeline job '${jobName}' configured (manual trigger, SCM)")
 
     - name: Restart Jenkins container to pick up changes
       docker_container:

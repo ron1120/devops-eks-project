@@ -12,7 +12,8 @@ pipeline {
         GIT_REPO       = 'https://github.com/ron1120/devops-eks-project.git'
         AWS_REGION     = 'us-east-1'
         DOCKERHUB_REPO = 'ronsss/sawe-engine'
-        VENV_DIR       = 'venv'
+        ECR_REPO_NAME    = 'sawe-engine'
+        VENV_DIR         = 'venv'
     }
 
     triggers { githubPush() }
@@ -200,7 +201,7 @@ pipeline {
             }
         }
 
-        stage('Push to Docker Hub') {
+        stage('Push to Docker Hub and ECR') {
             when {
                 allOf {
                     environment name: 'ENGINE_CHANGED', value: 'true'
@@ -219,6 +220,19 @@ pipeline {
                     docker push ${env.DOCKERHUB_REPO}:${env.BUILD_TAG}
                     docker push ${env.DOCKERHUB_REPO}:latest
                     docker logout || true
+                    unset AWS_PROFILE 2>/dev/null || true
+                    export AWS_PAGER=
+                    set +x
+                    ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${env.AWS_REGION})
+                    ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                    aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin "\${ECR_REGISTRY}"
+                    set -x
+                    docker tag ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
+                    docker tag ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.BUILD_TAG}
+                    docker tag ${env.DOCKERHUB_REPO}:latest \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:latest
+                    docker push \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}
+                    docker push \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.BUILD_TAG}
+                    docker push \${ECR_REGISTRY}/${env.ECR_REPO_NAME}:latest
                 """
             }
         }
@@ -227,6 +241,13 @@ pipeline {
             when { environment name: 'ENGINE_CHANGED', value: 'true' }
             steps {
                 sh """
+                    ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${env.AWS_REGION} 2>/dev/null || echo "")
+                    if [ -n "\$ACCOUNT_ID" ]; then
+                        ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                        docker rmi "\${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.IMAGE_TAG}" || true
+                        docker rmi "\${ECR_REGISTRY}/${env.ECR_REPO_NAME}:${env.BUILD_TAG}" || true
+                        docker rmi "\${ECR_REGISTRY}/${env.ECR_REPO_NAME}:latest" || true
+                    fi
                     docker rmi ${env.DOCKERHUB_REPO}:${env.IMAGE_TAG} || true
                     docker rmi ${env.DOCKERHUB_REPO}:${env.BUILD_TAG} || true
                     docker rmi ${env.DOCKERHUB_REPO}:latest || true
