@@ -25,8 +25,10 @@ RUN pytest engine/tests-engine/ -v --tb=short
 # ---------- Stage 2: Production ----------
 FROM python:3.12-slim AS production
 
+ARG VERSION=unknown
 LABEL maintainer="ron1120"
 LABEL description="SeyoAWE Engine"
+LABEL org.opencontainers.image.version="${VERSION}"
 
 WORKDIR /app
 

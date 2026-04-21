@@ -2,7 +2,7 @@
 # Dynamic Ansible inventory — reads JENKINS_EIP from .env
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/.env"
+source "$SCRIPT_DIR/../configure-env/.env"
 
 if [ "$1" == "--list" ]; then
   cat <<EOF

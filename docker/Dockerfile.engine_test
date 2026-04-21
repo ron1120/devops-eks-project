@@ -19,10 +19,9 @@ CMD ["pytest", "engine/tests-engine/", "-v"]
 
 
 ### Build engine_test locally:
-### docker build -f Dockerfile.engine_test -t engine-app ..
-## ARM BUILD:
-## docker build --platform linux/als
-md64 -f Dockerfile.engine_test -t engine-app ..
+### docker build -f docker/Dockerfile.engine_test -t engine-app ..
+### ARM build:
+### docker build --platform linux/amd64 -f docker/Dockerfile.engine_test -t engine-app ..
 
 
 ### Run engine_test locally:

@@ -1,0 +1,23 @@
+# Build context is the repo root: docker build -f docker/Dockerfile.cli .
+# Keep this list aligned with COPY instructions in docker/Dockerfile.*
+
+.git
+**/.pytest_cache
+**/venv
+**/.venv
+**/__pycache__
+*.py[cod]
+.terraform
+**/.terraform
+*.tfstate
+*.tfstate.*
+
+# Not copied into images — shrinks context for CI
+ansible/
+jenkins/
+k8s/
+terraform/
+infrastructure/
+configure-env/
+docs/
+monitoring/

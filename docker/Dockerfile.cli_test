@@ -19,8 +19,8 @@ CMD ["pytest", "cli/tests-cli/", "-v"]
 ### Can simply access locally the cli using:
 ### docker run -it cli-test:latest bash
 
-### Build image using this dockerfile and main project directory:
-### docker build -f Dockerfile.cli_test -t cli-test ..
+### Build image using this dockerfile and repo root as context:
+### docker build -f docker/Dockerfile.cli_test -t cli-test ..
 
 # Run test image:
 # docker run --rm cli-test
