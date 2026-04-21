@@ -20,6 +20,17 @@ spec:
       labels:
         app.kubernetes.io/name: sawe-engine
     spec:
+      securityContext:
+        fsGroup: 999
+      initContainers:
+        - name: fix-permissions
+          image: sawe-engine:latest
+          command: ["sh", "-c", "chown -R 999:999 /app/seyoawe-community"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: engine-data
+              mountPath: /app/seyoawe-community
       containers:
         - name: engine
           image: sawe-engine:latest
@@ -31,25 +42,20 @@ spec:
             - name: engine-data
               mountPath: /app/seyoawe-community
           startupProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: http
             failureThreshold: 30
             periodSeconds: 5
           readinessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 3
           livenessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: http
             initialDelaySeconds: 45
             periodSeconds: 20
-            timeoutSeconds: 5
           resources:
             requests:
               cpu: 100m
