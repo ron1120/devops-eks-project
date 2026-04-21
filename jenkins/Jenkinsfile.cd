@@ -169,6 +169,8 @@ EOF
                     aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION} >/dev/null
                     kubectl delete deployment sawe-engine -n ${APP_NAMESPACE} --ignore-not-found
                     kubectl apply -k k8s/overlays/cd
+                    kubectl rollout restart statefulset/sawe-engine -n ${APP_NAMESPACE}
+                    kubectl rollout restart deployment/sawe-cli -n ${APP_NAMESPACE}
                     kubectl rollout status statefulset/sawe-engine -n ${APP_NAMESPACE} --timeout=300s
                     kubectl rollout status deployment/sawe-cli -n ${APP_NAMESPACE} --timeout=300s
                     kubectl get pods -n ${APP_NAMESPACE} -o wide
