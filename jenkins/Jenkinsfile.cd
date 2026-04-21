@@ -13,6 +13,8 @@
 //   - eks:DescribeCluster, eks:ListClusters (this file)
 //   - ecr:GetAuthorizationToken + ecr:DescribeImages + existing ECR push/pull actions on repositories
 //   Plus cluster access: map this IAM role/user in EKS (Access entries or aws-auth ConfigMap) so kubectl works.
+//
+// kubectl: if not installed on the agent, the pipeline downloads stable linux/amd64|arm64 from dl.k8s.io (needs outbound HTTPS).
 
 pipeline {
     agent any
@@ -56,6 +58,18 @@ pipeline {
                     unset AWS_PROFILE 2>/dev/null || true
                     export AWS_PAGER=
                     export AWS_DEFAULT_REGION=${AWS_REGION}
+
+                    CD_TOOLS="\${WORKSPACE}/.cd-tools"
+                    mkdir -p "\$CD_TOOLS"
+                    if ! command -v kubectl >/dev/null 2>&1 && [ ! -x "\$CD_TOOLS/kubectl" ]; then
+                        KVER=\$(curl -L -s https://dl.k8s.io/release/stable.txt)
+                        ARCH=\$(uname -m)
+                        case "\$ARCH" in x86_64) KARCH=amd64 ;; aarch64) KARCH=arm64 ;; *) echo "[cd] unsupported arch: \$ARCH"; exit 1 ;; esac
+                        echo "[cd] installing kubectl \$KVER (\$KARCH) -> \$CD_TOOLS"
+                        curl -fsSL "https://dl.k8s.io/release/\${KVER}/bin/linux/\${KARCH}/kubectl" -o "\$CD_TOOLS/kubectl"
+                        chmod +x "\$CD_TOOLS/kubectl"
+                    fi
+                    export PATH="\$CD_TOOLS:\$PATH"
 
                     ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${AWS_REGION})
                     ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
@@ -117,6 +131,18 @@ pipeline {
                     unset AWS_PROFILE 2>/dev/null || true
                     export AWS_PAGER=
                     export AWS_DEFAULT_REGION=${AWS_REGION}
+
+                    CD_TOOLS="\${WORKSPACE}/.cd-tools"
+                    mkdir -p "\$CD_TOOLS"
+                    if ! command -v kubectl >/dev/null 2>&1 && [ ! -x "\$CD_TOOLS/kubectl" ]; then
+                        KVER=\$(curl -L -s https://dl.k8s.io/release/stable.txt)
+                        ARCH=\$(uname -m)
+                        case "\$ARCH" in x86_64) KARCH=amd64 ;; aarch64) KARCH=arm64 ;; *) echo "[cd] unsupported arch: \$ARCH"; exit 1 ;; esac
+                        echo "[cd] installing kubectl \$KVER (\$KARCH) -> \$CD_TOOLS"
+                        curl -fsSL "https://dl.k8s.io/release/\${KVER}/bin/linux/\${KARCH}/kubectl" -o "\$CD_TOOLS/kubectl"
+                        chmod +x "\$CD_TOOLS/kubectl"
+                    fi
+                    export PATH="\$CD_TOOLS:\$PATH"
 
                     ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${AWS_REGION})
                     ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
