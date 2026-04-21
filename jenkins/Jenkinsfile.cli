@@ -274,22 +274,29 @@ pipeline {
                 }
             }
             steps {
-                sh """
-                    git config user.email "jenkins@seyoawe.io"
-                    git config user.name "Jenkins CI"
-                    if ! git rev-parse "cli-v${env.SEM_VERSION}" >/dev/null 2>&1; then
-                        git tag -a "cli-v${env.SEM_VERSION}" -m "CLI release v${env.SEM_VERSION} (build #${env.BUILD_NUMBER})"
-                        set +x
-                        SECRET=\$(aws secretsmanager get-secret-value --secret-id RonGitUser --region ${env.AWS_REGION} --query SecretString --output text)
-                        GIT_USER=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
-                        GIT_TOKEN=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
-                        git push https://\$GIT_USER:\$GIT_TOKEN@github.com/ron1120/devops-eks-project.git "cli-v${env.SEM_VERSION}"
-                        set -x
-                        echo "Tagged: cli-v${env.SEM_VERSION}"
-                    else
-                        echo "Tag cli-v${env.SEM_VERSION} already exists — skipping"
-                    fi
-                """
+                script {
+                    try {
+                        sh """
+                            git config user.email "jenkins@seyoawe.io"
+                            git config user.name "Jenkins CI"
+                            if ! git rev-parse "cli-v${env.SEM_VERSION}" >/dev/null 2>&1; then
+                                git tag -a "cli-v${env.SEM_VERSION}" -m "CLI release v${env.SEM_VERSION} (build #${env.BUILD_NUMBER})"
+                                set +x
+                                SECRET=\$(aws secretsmanager get-secret-value --secret-id RonGitUser --region ${env.AWS_REGION} --query SecretString --output text)
+                                GIT_USER=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
+                                GIT_TOKEN=\$(echo "\$SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+                                git push https://\$GIT_USER:\$GIT_TOKEN@github.com/ron1120/devops-eks-project.git "cli-v${env.SEM_VERSION}"
+                                set -x
+                                echo "Tagged: cli-v${env.SEM_VERSION}"
+                            else
+                                echo "Tag cli-v${env.SEM_VERSION} already exists — skipping"
+                            fi
+                        """
+                    } catch (err) {
+                        echo "WARN: Tag push failed (${err.message}) — continuing so CD can trigger"
+                        currentBuild.result = 'SUCCESS'
+                    }
+                }
             }
         }
 
