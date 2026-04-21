@@ -21,17 +21,44 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+# Use aws eks get-token (exec) so each plan/apply gets a fresh token. A static
+# aws_eks_cluster_auth token can expire during helm refresh and show up as
+# system:anonymous / secrets forbidden in the monitoring namespace.
 provider "kubernetes" {
   host                   = aws_eks_cluster.eks.endpoint
   cluster_ca_certificate = base64decode(aws_eks_cluster.eks.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.eks.token
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args = [
+      "eks",
+      "get-token",
+      "--cluster-name",
+      aws_eks_cluster.eks.name,
+      "--region",
+      var.aws_region,
+    ]
+  }
 }
 
 provider "helm" {
   kubernetes {
     host                   = aws_eks_cluster.eks.endpoint
     cluster_ca_certificate = base64decode(aws_eks_cluster.eks.certificate_authority[0].data)
-    token                  = data.aws_eks_cluster_auth.eks.token
+
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args = [
+        "eks",
+        "get-token",
+        "--cluster-name",
+        aws_eks_cluster.eks.name,
+        "--region",
+        var.aws_region,
+      ]
+    }
   }
 }
 
@@ -181,11 +208,6 @@ resource "aws_eks_cluster" "eks" {
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_policy
   ]
-}
-
-# Token for Kubernetes/Helm providers (same IAM identity as Terraform; no aws CLI exec).
-data "aws_eks_cluster_auth" "eks" {
-  name = aws_eks_cluster.eks.name
 }
 
 # Jenkins EC2 role (same account): allow kubectl / CD pipeline after aws eks update-kubeconfig.
