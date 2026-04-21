@@ -1,0 +1,67 @@
+# Automation engine: persistent workdir (workflows, logs) + HTTP on 8080 (see engine/configuration/config.yaml).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sawe-engine
+  labels:
+    app.kubernetes.io/name: sawe-engine
+    app.kubernetes.io/component: engine
+spec:
+  serviceName: sawe-engine-headless
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sawe-engine
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sawe-engine
+    spec:
+      containers:
+        - name: engine
+          image: sawe-engine:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: engine-data
+              mountPath: /app/seyoawe-community
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: engine-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi

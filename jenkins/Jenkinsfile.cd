@@ -81,9 +81,11 @@ pipeline {
                     need_deploy=0
 
                     # Compare ECR :latest digest to running pod imageID (includes same digest when pulled).
-                    for pair in "sawe-engine:sawe-engine" "sawe-cli:sawe-cli"; do
-                        repo=\$(echo "\$pair" | cut -d: -f1)
-                        dep=\$(echo "\$pair" | cut -d: -f2)
+                    # repo:workload-name:kubernetes-kind (sawe-engine is a StatefulSet; sawe-cli is a Deployment).
+                    for triple in "sawe-engine:sawe-engine:statefulset" "sawe-cli:sawe-cli:deployment"; do
+                        repo=\$(echo "\$triple" | cut -d: -f1)
+                        dep=\$(echo "\$triple" | cut -d: -f2)
+                        kind=\$(echo "\$triple" | cut -d: -f3)
                         digest=\$(aws ecr describe-images --repository-name "\$repo" --region ${AWS_REGION} \\
                             --image-ids imageTag=${ECR_TAG} \\
                             --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageDigest' --output text 2>/dev/null || echo "")
@@ -93,8 +95,8 @@ pipeline {
                             continue
                         fi
 
-                        if ! kubectl get deployment "\$dep" -n ${APP_NAMESPACE} >/dev/null 2>&1; then
-                            echo "[cd] deployment \$dep missing — will apply manifests"
+                        if ! kubectl get "\$kind" "\$dep" -n ${APP_NAMESPACE} >/dev/null 2>&1; then
+                            echo "[cd] \$kind/\$dep missing — will apply manifests"
                             need_deploy=1
                             continue
                         fi
@@ -165,8 +167,9 @@ images:
 EOF
 
                     aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION} >/dev/null
+                    kubectl delete deployment sawe-engine -n ${APP_NAMESPACE} --ignore-not-found
                     kubectl apply -k k8s/overlays/cd
-                    kubectl rollout status deployment/sawe-engine -n ${APP_NAMESPACE} --timeout=300s
+                    kubectl rollout status statefulset/sawe-engine -n ${APP_NAMESPACE} --timeout=300s
                     kubectl rollout status deployment/sawe-cli -n ${APP_NAMESPACE} --timeout=300s
                     kubectl get pods -n ${APP_NAMESPACE} -o wide
                 """

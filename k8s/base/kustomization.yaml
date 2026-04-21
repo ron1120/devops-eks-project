@@ -2,6 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
-  - sawe-engine-deployment.yaml
+  - sawe-engine-headless-service.yaml
+  - sawe-engine-statefulset.yaml
   - sawe-engine-service.yaml
   - sawe-cli-deployment.yaml
