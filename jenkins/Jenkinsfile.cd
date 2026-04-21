@@ -1,21 +1,18 @@
 // Continuous deployment to EKS (manifests under k8s/).
 //
-// AWS: uses the Jenkins EC2 instance profile only — no Jenkins credential "aws-credentials".
-// Git: public HTTPS clone — no "RonGitUser" Jenkins credential (avoid AccessDenied from missing creds).
-// Commit and push this file to GitHub so the job stops using an older Jenkinsfile.cd that wrapped
-// Terraform with withCredentials([usernamePassword(credentialsId: 'aws-credentials', ...)]) when you do not store keys in Jenkins.
+// AWS: uses the Jenkins EC2 instance-profile — no stored AWS credentials.
+// Git: public HTTPS clone — no GitHub credential needed.
 //
-// Jenkins UI — downstream trigger (alternative / duplicate to pipeline triggers):
-//   Job: cd (or your CD job name) → Configure → Build Triggers →
+// Jenkins UI — downstream trigger (alternative to pipeline `triggers` block):
+//   Job: cd → Configure → Build Triggers →
 //   "Build after other projects are built" → Projects: cli-ci, engine-ci → Trigger: Stable
 //
-// IAM on the Jenkins EC2 role (see infrastructure/jenkins-master-aws/terraform/main.tf):
-//   - eks:DescribeCluster, eks:ListClusters (this file)
-//   - ecr:GetAuthorizationToken + ecr:DescribeImages + existing ECR push/pull actions on repositories
-//   Plus cluster access: terraform/devops-eks-cluster grants the Jenkins EC2 role an EKS access entry
-//   (AmazonEKSClusterAdminPolicy). Apply that module after changing it, or kubectl gets "provide credentials".
+// IAM on the Jenkins EC2 role (infrastructure/jenkins-master-aws/terraform/main.tf):
+//   eks:DescribeCluster, eks:ListClusters, ecr:DescribeImages, ecr:GetAuthorizationToken.
+//   Cluster access: terraform/devops-eks-cluster grants the Jenkins EC2 role an EKS access entry
+//   (AmazonEKSClusterAdminPolicy).
 //
-// kubectl: if not installed on the agent, the pipeline downloads stable linux/amd64|arm64 from dl.k8s.io (needs outbound HTTPS).
+// kubectl: downloaded on first run if missing; cached in ${WORKSPACE}/.cd-tools.
 
 pipeline {
     agent any
@@ -27,8 +24,6 @@ pipeline {
         disableConcurrentBuilds()
     }
 
-    // Run when either CI job completes successfully (same Jenkins controller).
-    // Adjust job names if they live under a folder (e.g. "folder/cli-ci").
     triggers {
         upstream(
             upstreamProjects: 'cli-ci,engine-ci',
@@ -37,11 +32,11 @@ pipeline {
     }
 
     environment {
-        GIT_REPO          = 'https://github.com/ron1120/devops-eks-project.git'
-        AWS_REGION        = 'us-east-1'
-        EKS_CLUSTER_NAME  = 'devops-eks-cluster'
-        APP_NAMESPACE     = 'seyoawe'
-        ECR_TAG           = 'latest'
+        GIT_REPO         = 'https://github.com/ron1120/devops-eks-project.git'
+        AWS_REGION       = 'us-east-1'
+        EKS_CLUSTER_NAME = 'devops-eks-cluster'
+        APP_NAMESPACE    = 'seyoawe'
+        DEPLOY_TAG       = 'latest'
     }
 
     stages {
@@ -49,19 +44,19 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main', url: env.GIT_REPO
+                script {
+                    env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                }
             }
         }
 
-        stage('Kubeconfig & detect new ECR images') {
+        stage('Setup tools') {
             steps {
                 sh """
                     set -e
-                    unset AWS_PROFILE 2>/dev/null || true
-                    export AWS_PAGER=
-                    export AWS_DEFAULT_REGION=${AWS_REGION}
-
                     CD_TOOLS="\${WORKSPACE}/.cd-tools"
                     mkdir -p "\$CD_TOOLS"
+
                     if ! command -v kubectl >/dev/null 2>&1 && [ ! -x "\$CD_TOOLS/kubectl" ]; then
                         KVER=\$(curl -L -s https://dl.k8s.io/release/stable.txt)
                         ARCH=\$(uname -m)
@@ -72,40 +67,49 @@ pipeline {
                     fi
                     export PATH="\$CD_TOOLS:\$PATH"
 
-                    ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${AWS_REGION})
-                    ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
+                    unset AWS_PROFILE 2>/dev/null || true
+                    export AWS_PAGER=
                     aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION} >/dev/null
                     kubectl cluster-info >/dev/null
+                    echo "[cd] kubeconfig ready for ${EKS_CLUSTER_NAME}"
+                """
+            }
+        }
+
+        stage('Detect image drift') {
+            steps {
+                sh """
+                    set -e
+                    export PATH="\${WORKSPACE}/.cd-tools:\$PATH"
+                    export AWS_DEFAULT_REGION=${AWS_REGION}
 
                     need_deploy=0
 
-                    # Compare ECR :latest digest to running pod imageID (includes same digest when pulled).
-                    # repo:workload-name:kubernetes-kind (sawe-engine is a StatefulSet; sawe-cli is a Deployment).
                     for triple in "sawe-engine:sawe-engine:statefulset" "sawe-cli:sawe-cli:deployment"; do
                         repo=\$(echo "\$triple" | cut -d: -f1)
-                        dep=\$(echo "\$triple" | cut -d: -f2)
+                        workload=\$(echo "\$triple" | cut -d: -f2)
                         kind=\$(echo "\$triple" | cut -d: -f3)
+
                         digest=\$(aws ecr describe-images --repository-name "\$repo" --region ${AWS_REGION} \\
-                            --image-ids imageTag=${ECR_TAG} \\
+                            --image-ids imageTag=${DEPLOY_TAG} \\
                             --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageDigest' --output text 2>/dev/null || echo "")
 
                         if [ -z "\$digest" ] || [ "\$digest" = "None" ]; then
-                            echo "[cd] skip \$repo: no image with tag ${ECR_TAG} in ECR"
+                            echo "[cd] skip \$repo: no image with tag ${DEPLOY_TAG} in ECR"
                             continue
                         fi
 
-                        if ! kubectl get "\$kind" "\$dep" -n ${APP_NAMESPACE} >/dev/null 2>&1; then
-                            echo "[cd] \$kind/\$dep missing — will apply manifests"
+                        if ! kubectl get "\$kind" "\$workload" -n ${APP_NAMESPACE} >/dev/null 2>&1; then
+                            echo "[cd] \$kind/\$workload missing — will apply manifests"
                             need_deploy=1
                             continue
                         fi
 
-                        imgid=\$(kubectl get pods -n ${APP_NAMESPACE} -l "app.kubernetes.io/name=\$dep" \\
+                        imgid=\$(kubectl get pods -n ${APP_NAMESPACE} -l "app.kubernetes.io/name=\$workload" \\
                             -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || echo "")
 
                         if [ -z "\$imgid" ]; then
-                            echo "[cd] no ready pod for \$dep — will apply manifests"
+                            echo "[cd] no ready pod for \$workload — will apply manifests"
                             need_deploy=1
                             continue
                         fi
@@ -131,21 +135,8 @@ pipeline {
             steps {
                 sh """
                     set -e
-                    unset AWS_PROFILE 2>/dev/null || true
-                    export AWS_PAGER=
+                    export PATH="\${WORKSPACE}/.cd-tools:\$PATH"
                     export AWS_DEFAULT_REGION=${AWS_REGION}
-
-                    CD_TOOLS="\${WORKSPACE}/.cd-tools"
-                    mkdir -p "\$CD_TOOLS"
-                    if ! command -v kubectl >/dev/null 2>&1 && [ ! -x "\$CD_TOOLS/kubectl" ]; then
-                        KVER=\$(curl -L -s https://dl.k8s.io/release/stable.txt)
-                        ARCH=\$(uname -m)
-                        case "\$ARCH" in x86_64) KARCH=amd64 ;; aarch64) KARCH=arm64 ;; *) echo "[cd] unsupported arch: \$ARCH"; exit 1 ;; esac
-                        echo "[cd] installing kubectl \$KVER (\$KARCH) -> \$CD_TOOLS"
-                        curl -fsSL "https://dl.k8s.io/release/\${KVER}/bin/linux/\${KARCH}/kubectl" -o "\$CD_TOOLS/kubectl"
-                        chmod +x "\$CD_TOOLS/kubectl"
-                    fi
-                    export PATH="\$CD_TOOLS:\$PATH"
 
                     ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${AWS_REGION})
                     ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
@@ -160,19 +151,17 @@ resources:
 images:
   - name: sawe-engine
     newName: \${ECR_REGISTRY}/sawe-engine
-    newTag: ${ECR_TAG}
+    newTag: ${DEPLOY_TAG}
   - name: sawe-cli
     newName: \${ECR_REGISTRY}/sawe-cli
-    newTag: ${ECR_TAG}
+    newTag: ${DEPLOY_TAG}
 EOF
 
-                    aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION} >/dev/null
-                    kubectl delete deployment sawe-engine -n ${APP_NAMESPACE} --ignore-not-found
                     kubectl apply -k k8s/overlays/cd
                     kubectl rollout restart statefulset/sawe-engine -n ${APP_NAMESPACE}
-                    kubectl rollout restart deployment/sawe-cli -n ${APP_NAMESPACE}
-                    kubectl rollout status statefulset/sawe-engine -n ${APP_NAMESPACE} --timeout=300s
-                    kubectl rollout status deployment/sawe-cli -n ${APP_NAMESPACE} --timeout=300s
+                    kubectl rollout restart deployment/sawe-cli     -n ${APP_NAMESPACE}
+                    kubectl rollout status  statefulset/sawe-engine -n ${APP_NAMESPACE} --timeout=300s
+                    kubectl rollout status  deployment/sawe-cli     -n ${APP_NAMESPACE} --timeout=300s
                     kubectl get pods -n ${APP_NAMESPACE} -o wide
                 """
             }
@@ -181,7 +170,7 @@ EOF
         stage('Skip notice') {
             when { expression { env.DO_DEPLOY != '1' } }
             steps {
-                echo '[cd] No ECR/cluster drift for sawe-cli / sawe-engine — manifests not applied.'
+                echo "[cd] No image drift for sawe-engine / sawe-cli — manifests not applied."
             }
         }
     }
@@ -191,8 +180,9 @@ EOF
             script {
                 echo """
                 =============================================
-                 CD summary
+                 CD Pipeline — Summary
                 =============================================
+                 Commit         : ${env.GIT_COMMIT_SHORT ?: 'N/A'}
                  Deploy applied : ${env.DO_DEPLOY == '1' ? 'yes' : 'no'}
                  Cluster        : ${env.EKS_CLUSTER_NAME}
                  Namespace      : ${env.APP_NAMESPACE}
