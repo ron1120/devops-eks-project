@@ -12,7 +12,8 @@
 // IAM on the Jenkins EC2 role (see infrastructure/jenkins-master-aws/terraform/main.tf):
 //   - eks:DescribeCluster, eks:ListClusters (this file)
 //   - ecr:GetAuthorizationToken + ecr:DescribeImages + existing ECR push/pull actions on repositories
-//   Plus cluster access: map this IAM role/user in EKS (Access entries or aws-auth ConfigMap) so kubectl works.
+//   Plus cluster access: terraform/devops-eks-cluster grants the Jenkins EC2 role an EKS access entry
+//   (AmazonEKSClusterAdminPolicy). Apply that module after changing it, or kubectl gets "provide credentials".
 //
 // kubectl: if not installed on the agent, the pipeline downloads stable linux/amd64|arm64 from dl.k8s.io (needs outbound HTTPS).
 
@@ -198,4 +199,3 @@ EOF
         }
     }
 }
-asd

@@ -19,6 +19,8 @@ provider "aws" {
   region = var.aws_region
 }
 
+data "aws_caller_identity" "current" {}
+
 provider "kubernetes" {
   host                   = aws_eks_cluster.eks.endpoint
   cluster_ca_certificate = base64decode(aws_eks_cluster.eks.certificate_authority[0].data)
@@ -61,9 +63,9 @@ resource "aws_subnet" "public_1" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name                                           = "${var.project_name}-public-subnet-1"
-    "kubernetes.io/cluster/${var.cluster_name}"    = "shared"
-    "kubernetes.io/role/elb"                       = 1
+    Name                                        = "${var.project_name}-public-subnet-1"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                    = 1
   }
 }
 
@@ -74,9 +76,9 @@ resource "aws_subnet" "public_2" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name                                           = "${var.project_name}-public-subnet-2"
-    "kubernetes.io/cluster/${var.cluster_name}"    = "shared"
-    "kubernetes.io/role/elb"                       = 1
+    Name                                        = "${var.project_name}-public-subnet-2"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                    = 1
   }
 }
 
@@ -166,6 +168,12 @@ resource "aws_eks_cluster" "eks" {
   role_arn = aws_iam_role.eks_cluster_role.arn
   version  = "1.30"
 
+  # Required for aws_eks_access_entry / policy associations (Jenkins CD kubectl).
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
   vpc_config {
     subnet_ids = [aws_subnet.public_1.id, aws_subnet.public_2.id]
   }
@@ -178,6 +186,36 @@ resource "aws_eks_cluster" "eks" {
 # Token for Kubernetes/Helm providers (same IAM identity as Terraform; no aws CLI exec).
 data "aws_eks_cluster_auth" "eks" {
   name = aws_eks_cluster.eks.name
+}
+
+# Jenkins EC2 role (same account): allow kubectl / CD pipeline after aws eks update-kubeconfig.
+# Without this, the API returns "the server has asked for the client to provide credentials".
+locals {
+  jenkins_cd_principal_arn = var.jenkins_cd_role_arn != "" ? var.jenkins_cd_role_arn : (
+    var.jenkins_cd_role_name != "" ? "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.jenkins_cd_role_name}" : null
+  )
+}
+
+resource "aws_eks_access_entry" "jenkins_cd" {
+  count = local.jenkins_cd_principal_arn != null ? 1 : 0
+
+  cluster_name  = aws_eks_cluster.eks.name
+  principal_arn = local.jenkins_cd_principal_arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "jenkins_cd" {
+  count = local.jenkins_cd_principal_arn != null ? 1 : 0
+
+  cluster_name  = aws_eks_cluster.eks.name
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+  principal_arn = local.jenkins_cd_principal_arn
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.jenkins_cd]
 }
 
 # --------- EKS Node Group ---------

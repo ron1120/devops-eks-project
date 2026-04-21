@@ -64,3 +64,15 @@ variable "grafana_admin_password" {
   default     = "admin"
   sensitive   = true
 }
+
+variable "jenkins_cd_role_name" {
+  description = "IAM role name of the Jenkins EC2 instance (infrastructure/jenkins-master-aws). Empty string skips EKS access entry."
+  type        = string
+  default     = "jenkins_master-ec2-role"
+}
+
+variable "jenkins_cd_role_arn" {
+  description = "Optional full IAM ARN for Jenkins CD; if set, jenkins_cd_role_name is ignored."
+  type        = string
+  default     = ""
+}
