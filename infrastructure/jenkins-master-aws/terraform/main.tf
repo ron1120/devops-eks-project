@@ -164,6 +164,58 @@ resource "aws_iam_role_policy" "jenkins_secrets" {
   })
 }
 
+# Docker push to ECR from Jenkins CI (Jenkinsfile.cli / Jenkinsfile.engine).
+# GetAuthorizationToken must be on *; image APIs are scoped to repos in this account/region.
+resource "aws_iam_role_policy" "jenkins_ecr" {
+  name = "${var.project_name}-ecr-push-policy"
+  role = aws_iam_role.jenkins_ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EcrAuthToken"
+        Effect = "Allow"
+        Action = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPushPullRepos"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:DescribeImages"
+        ]
+        Resource = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/*"
+      }
+    ]
+  })
+}
+
+# Jenkinsfile.cd: aws eks update-kubeconfig + kubectl against the cluster
+resource "aws_iam_role_policy" "jenkins_eks" {
+  name = "${var.project_name}-eks-cd-policy"
+  role = aws_iam_role.jenkins_ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "eks:DescribeCluster",
+        "eks:ListClusters"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "jenkins" {
   name = "${var.project_name}-instance-profile"
   role = aws_iam_role.jenkins_ec2.name

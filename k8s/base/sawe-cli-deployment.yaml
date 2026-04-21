@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sawe-cli
+  labels:
+    app.kubernetes.io/name: sawe-cli
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sawe-cli
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sawe-cli
+    spec:
+      containers:
+        - name: cli
+          image: sawe-cli:latest
+          # CLI image default entrypoint exits; keep pod up for rollout/digest checks.
+          command: ["/bin/sh", "-c", "sleep infinity"]

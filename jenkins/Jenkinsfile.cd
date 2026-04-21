@@ -1,193 +1,174 @@
-/*
- * Continuous deployment: Terraform (EKS + monitoring) + Kubernetes (sawe-engine).
- *
- * Prerequisites on the Jenkins agent:
- *   - terraform (>= 1.0), AWS CLI v2, kubectl (version compatible with EKS 1.30)
- *   - Docker not required for this pipeline
- *
- * Jenkins credentials (configure in Jenkins → Credentials):
- *   - RonGitUser          — Git username/password or user/token for github.com (matches Jenkinsfile.engine checkout).
- *   - aws-credentials     — Username/password kind: username = AWS_ACCESS_KEY_ID, password = AWS_SECRET_ACCESS_KEY.
- *
- * Optional:
- *   - terraform.tfvars or environment-specific vars in terraform/devops-eks-cluster/ (e.g. grafana_admin_password).
- *   - This module uses local Terraform state by default (no remote backend in main.tf); do not delete .tfstate on the agent if you rely on it.
- *
- * Application image: ronsss/sawe-engine:<SEM_VERSION> where SEM_VERSION is read from the repo root VERSION file.
- */
+// Continuous deployment to EKS (manifests under k8s/).
+//
+// AWS: uses the Jenkins EC2 instance profile only — no Jenkins credential "aws-credentials".
+// Git: public HTTPS clone — no "RonGitUser" Jenkins credential (avoid AccessDenied from missing creds).
+// Commit and push this file to GitHub so the job stops using an older Jenkinsfile.cd that wrapped
+// Terraform with withCredentials([usernamePassword(credentialsId: 'aws-credentials', ...)]) when you do not store keys in Jenkins.
+//
+// Jenkins UI — downstream trigger (alternative / duplicate to pipeline triggers):
+//   Job: cd (or your CD job name) → Configure → Build Triggers →
+//   "Build after other projects are built" → Projects: cli-ci, engine-ci → Trigger: Stable
+//
+// IAM on the Jenkins EC2 role (see infrastructure/jenkins-master-aws/terraform/main.tf):
+//   - eks:DescribeCluster, eks:ListClusters (this file)
+//   - ecr:GetAuthorizationToken + ecr:DescribeImages + existing ECR push/pull actions on repositories
+//   Plus cluster access: map this IAM role/user in EKS (Access entries or aws-auth ConfigMap) so kubectl works.
 
 pipeline {
     agent any
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 60, unit: 'MINUTES')
+        timeout(time: 20, unit: 'MINUTES')
         timestamps()
         disableConcurrentBuilds()
     }
 
+    // Run when either CI job completes successfully (same Jenkins controller).
+    // Adjust job names if they live under a folder (e.g. "folder/cli-ci").
+    triggers {
+        upstream(
+            upstreamProjects: 'cli-ci,engine-ci',
+            threshold: hudson.model.Result.SUCCESS
+        )
+    }
+
     environment {
-        GIT_REPO           = 'https://github.com/ron1120/devops-eks-project.git'
-        GIT_CREDENTIALS    = 'RonGitUser'
-        AWS_DEFAULT_REGION = 'us-east-1'
-        EKS_CLUSTER_NAME   = 'devops-eks-cluster'
-        TF_ROOT            = 'terraform/devops-eks-cluster'
-        APP_NAMESPACE      = 'seyoawe'
-        ENGINE_DEPLOYMENT  = 'sawe-engine'
-        DOCKERHUB_ENGINE   = 'ronsss/sawe-engine'
+        GIT_REPO          = 'https://github.com/ron1120/devops-eks-project.git'
+        AWS_REGION        = 'us-east-1'
+        EKS_CLUSTER_NAME  = 'devops-eks-cluster'
+        APP_NAMESPACE     = 'seyoawe'
+        ECR_TAG           = 'latest'
     }
 
     stages {
 
         stage('Checkout') {
             steps {
+                git branch: 'main', url: env.GIT_REPO
+            }
+        }
+
+        stage('Kubeconfig & detect new ECR images') {
+            steps {
+                sh """
+                    set -e
+                    unset AWS_PROFILE 2>/dev/null || true
+                    export AWS_PAGER=
+                    export AWS_DEFAULT_REGION=${AWS_REGION}
+
+                    ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${AWS_REGION})
+                    ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+                    aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION} >/dev/null
+                    kubectl cluster-info >/dev/null
+
+                    need_deploy=0
+
+                    # Compare ECR :latest digest to running pod imageID (includes same digest when pulled).
+                    for pair in "sawe-engine:sawe-engine" "sawe-cli:sawe-cli"; do
+                        repo=\$(echo "\$pair" | cut -d: -f1)
+                        dep=\$(echo "\$pair" | cut -d: -f2)
+                        digest=\$(aws ecr describe-images --repository-name "\$repo" --region ${AWS_REGION} \\
+                            --image-ids imageTag=${ECR_TAG} \\
+                            --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageDigest' --output text 2>/dev/null || echo "")
+
+                        if [ -z "\$digest" ] || [ "\$digest" = "None" ]; then
+                            echo "[cd] skip \$repo: no image with tag ${ECR_TAG} in ECR"
+                            continue
+                        fi
+
+                        if ! kubectl get deployment "\$dep" -n ${APP_NAMESPACE} >/dev/null 2>&1; then
+                            echo "[cd] deployment \$dep missing — will apply manifests"
+                            need_deploy=1
+                            continue
+                        fi
+
+                        imgid=\$(kubectl get pods -n ${APP_NAMESPACE} -l "app.kubernetes.io/name=\$dep" \\
+                            -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || echo "")
+
+                        if [ -z "\$imgid" ]; then
+                            echo "[cd] no ready pod for \$dep — will apply manifests"
+                            need_deploy=1
+                            continue
+                        fi
+
+                        if echo "\$imgid" | grep -qF "\$digest"; then
+                            echo "[cd] \$repo: cluster image matches ECR digest"
+                        else
+                            echo "[cd] \$repo: new image (ECR \$digest vs \$imgid)"
+                            need_deploy=1
+                        fi
+                    done
+
+                    echo "\$need_deploy" > .cd-needs-deploy
+                """
                 script {
-                    git branch: 'main', credentialsId: env.GIT_CREDENTIALS, url: env.GIT_REPO
-
-                    env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    env.GIT_BRANCH_NAME  = sh(script: 'git rev-parse --abbrev-ref HEAD || echo main', returnStdout: true).trim()
-                    if (env.GIT_BRANCH_NAME == 'HEAD') { env.GIT_BRANCH_NAME = 'main' }
-
-                    echo "Branch: ${env.GIT_BRANCH_NAME}  Commit: ${env.GIT_COMMIT_SHORT}"
+                    env.DO_DEPLOY = readFile(file: '.cd-needs-deploy').trim()
                 }
             }
         }
 
-        stage('Version') {
+        stage('Apply manifests') {
+            when { expression { env.DO_DEPLOY == '1' } }
             steps {
-                script {
-                    env.SEM_VERSION = sh(script: 'cat VERSION', returnStdout: true).trim()
-                    env.BUILD_TAG   = "${env.SEM_VERSION}-${env.BUILD_NUMBER}"
+                sh """
+                    set -e
+                    unset AWS_PROFILE 2>/dev/null || true
+                    export AWS_PAGER=
+                    export AWS_DEFAULT_REGION=${AWS_REGION}
 
-                    echo """
-                    =========================================
-                     Version : ${env.SEM_VERSION}
-                     Build   : ${env.BUILD_TAG}
-                     Commit  : ${env.GIT_COMMIT_SHORT}
-                     Cluster : ${env.EKS_CLUSTER_NAME} (${env.AWS_DEFAULT_REGION})
-                    =========================================
-                    """
-                }
-            }
-        }
+                    ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text --region ${AWS_REGION})
+                    ECR_REGISTRY="\${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-        stage('Terraform Init') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                    sh '''
-                        unset AWS_PROFILE || true
-                        export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}"
-                        cd "${TF_ROOT}"
-                        terraform init -input=false
-                    '''
-                }
-            }
-        }
-
-        stage('Terraform Plan') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                    script {
-                        def planStatus = sh(
-                            script: '''
-                                unset AWS_PROFILE || true
-                                export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}"
-                                cd "${TF_ROOT}"
-                                terraform plan -input=false -detailed-exitcode -out=tfplan
-                            ''',
-                            returnStatus: true
-                        )
-                        if (planStatus == 1) {
-                            error('terraform plan failed (exit 1)')
-                        }
-                        env.TF_CHANGES = (planStatus == 2) ? 'true' : 'false'
-                        echo "Terraform plan exit: ${planStatus}  (2 = pending changes)  TF_CHANGES=${env.TF_CHANGES}"
-                    }
-                }
-            }
-        }
-
-        stage('Approve Terraform Apply') {
-            when { environment name: 'TF_CHANGES', value: 'true' }
-            steps {
-                timeout(time: 24, unit: 'HOURS') {
-                    input message: "Terraform detected infrastructure changes for ${env.EKS_CLUSTER_NAME}. Apply?",
-                          ok: 'Apply',
-                          submitterParameter: 'APPROVER'
-                }
-                echo "Approved by: ${env.APPROVER ?: 'n/a'}"
-            }
-        }
-
-        stage('Terraform Apply') {
-            when { environment name: 'TF_CHANGES', value: 'true' }
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                    sh '''
-                        unset AWS_PROFILE || true
-                        export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}"
-                        cd "${TF_ROOT}"
-                        terraform apply -input=false -auto-approve tfplan
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy workload to EKS') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                    sh '''
-                        unset AWS_PROFILE || true
-                        export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}"
-                        aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_DEFAULT_REGION}"
-                    '''
-                    script {
-                        writeFile file: 'k8s/overlays/cd/kustomization.yaml', text: """# Generated by Jenkins CD — do not edit in CI (see repo template for structure)
+                    mkdir -p k8s/overlays/cd
+                    cat > k8s/overlays/cd/kustomization.yaml <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: ${env.APP_NAMESPACE}
+namespace: ${APP_NAMESPACE}
 resources:
   - ../../base
 images:
-  - name: ${env.DOCKERHUB_ENGINE}
-    newTag: ${env.SEM_VERSION}
-"""
-                    }
-                    sh '''
-                        unset AWS_PROFILE || true
-                        export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}"
-                        # monitoring is created by Terraform (helm kube-prometheus-stack). Warn if cluster predates that apply.
-                        if ! kubectl get namespace monitoring >/dev/null 2>&1; then
-                            echo "WARN: namespace monitoring not found — run Terraform apply if using bundled Prometheus/Grafana."
-                        fi
-                        kubectl apply -k k8s/overlays/cd/
-                        kubectl rollout status deployment/"${ENGINE_DEPLOYMENT}" -n "${APP_NAMESPACE}" --timeout=5m
-                        kubectl get pods -n "${APP_NAMESPACE}" -o wide
-                    '''
-                }
+  - name: sawe-engine
+    newName: \${ECR_REGISTRY}/sawe-engine
+    newTag: ${ECR_TAG}
+  - name: sawe-cli
+    newName: \${ECR_REGISTRY}/sawe-cli
+    newTag: ${ECR_TAG}
+EOF
+
+                    aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION} >/dev/null
+                    kubectl apply -k k8s/overlays/cd
+                    kubectl rollout status deployment/sawe-engine -n ${APP_NAMESPACE} --timeout=300s
+                    kubectl rollout status deployment/sawe-cli -n ${APP_NAMESPACE} --timeout=300s
+                    kubectl get pods -n ${APP_NAMESPACE} -o wide
+                """
+            }
+        }
+
+        stage('Skip notice') {
+            when { expression { env.DO_DEPLOY != '1' } }
+            steps {
+                echo '[cd] No ECR/cluster drift for sawe-cli / sawe-engine — manifests not applied.'
             }
         }
     }
 
     post {
-        success {
-            echo """
-            =============================================
-             CD succeeded
-             Version : ${env.SEM_VERSION}
-             Cluster : ${env.EKS_CLUSTER_NAME} (${env.AWS_DEFAULT_REGION})
-             Image   : ${env.DOCKERHUB_ENGINE}:${env.SEM_VERSION}
-            =============================================
-            """
-        }
-        failure {
-            echo """
-            =============================================
-             CD failed
-             Version : ${env.SEM_VERSION ?: 'unknown'}
-             Cluster : ${env.EKS_CLUSTER_NAME} (${env.AWS_DEFAULT_REGION})
-            =============================================
-            """
+        always {
+            script {
+                echo """
+                =============================================
+                 CD summary
+                =============================================
+                 Deploy applied : ${env.DO_DEPLOY == '1' ? 'yes' : 'no'}
+                 Cluster        : ${env.EKS_CLUSTER_NAME}
+                 Namespace      : ${env.APP_NAMESPACE}
+                 Result         : ${currentBuild.currentResult}
+                =============================================
+                """
+            }
+            cleanWs()
         }
     }
 }

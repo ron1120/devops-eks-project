@@ -5,7 +5,7 @@ metadata:
   labels:
     app.kubernetes.io/name: sawe-engine
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: sawe-engine
@@ -16,20 +16,16 @@ spec:
     spec:
       containers:
         - name: engine
-          image: ronsss/sawe-engine:latest
-          imagePullPolicy: Always
+          image: sawe-engine:latest
           ports:
-            - name: http
-              containerPort: 8080
+            - containerPort: 8080
           readinessProbe:
-            httpGet:
-              path: /
-              port: http
-            initialDelaySeconds: 15
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
-            httpGet:
-              path: /
-              port: http
-            initialDelaySeconds: 45
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 15
             periodSeconds: 20
