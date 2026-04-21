@@ -174,9 +174,9 @@ resource "aws_iam_role_policy" "jenkins_ecr" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "EcrAuthToken"
-        Effect = "Allow"
-        Action = ["ecr:GetAuthorizationToken"]
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
         Resource = "*"
       },
       {
@@ -198,21 +198,29 @@ resource "aws_iam_role_policy" "jenkins_ecr" {
   })
 }
 
-# Jenkinsfile.cd: aws eks update-kubeconfig + kubectl against the cluster
+# Jenkinsfile.cd: aws eks update-kubeconfig + kubectl against the cluster.
+# Apply this stack after adding/changing this policy: the Jenkins EC2 role must
+# include these permissions in IAM or update-kubeconfig fails with AccessDeniedException.
 resource "aws_iam_role_policy" "jenkins_eks" {
   name = "${var.project_name}-eks-cd-policy"
   role = aws_iam_role.jenkins_ec2.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "eks:DescribeCluster",
-        "eks:ListClusters"
-      ]
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Sid      = "EksDescribeCluster"
+        Effect   = "Allow"
+        Action   = ["eks:DescribeCluster"]
+        Resource = "arn:aws:eks:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster/${var.eks_cluster_name}"
+      },
+      {
+        Sid      = "EksListClusters"
+        Effect   = "Allow"
+        Action   = ["eks:ListClusters"]
+        Resource = "*"
+      }
+    ]
   })
 }
 
@@ -228,8 +236,8 @@ resource "aws_secretsmanager_secret" "dockerhub_credentials" {
   recovery_window_in_days = 0
 
   tags = {
-    Name                        = "${var.project_name}-dockerhub-creds"
-    "jenkins:credentials:type"  = "usernamePassword"
+    Name                       = "${var.project_name}-dockerhub-creds"
+    "jenkins:credentials:type" = "usernamePassword"
   }
 }
 
@@ -239,8 +247,8 @@ resource "aws_secretsmanager_secret" "git_credentials" {
   recovery_window_in_days = 0
 
   tags = {
-    Name                        = "${var.project_name}-git-creds"
-    "jenkins:credentials:type"  = "usernamePassword"
+    Name                       = "${var.project_name}-git-creds"
+    "jenkins:credentials:type" = "usernamePassword"
   }
 }
 
@@ -317,6 +325,12 @@ variable "existing_vpc_id" {
   description = "Existing VPC ID to reuse instead of creating a new VPC"
   type        = string
   default     = ""
+}
+
+variable "eks_cluster_name" {
+  description = "EKS cluster name for Jenkins CD (must match jenkins/Jenkinsfile.cd EKS_CLUSTER_NAME)"
+  type        = string
+  default     = "devops-eks-cluster"
 }
 
 # Elastic IP — reuse existing if found by Name tag, otherwise create
