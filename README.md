@@ -151,7 +151,6 @@ Three Jenkins Declarative Pipelines. CI runs on GitHub push; CD runs downstream 
 
 | Document                  | Location                                            |
 | ------------------------- | --------------------------------------------------- |
-| CI/CD Architecture        | [`docs/cicd-architecture.md`](docs/cicd-architecture.md) |
 | Architecture Diagram (PNG)| [`docs/assets/cicd-architecture.png`](docs/assets/cicd-architecture.png) |
 | SeyoAWE App Guide         | [`docs/seyoawe.md`](docs/seyoawe.md)                |
 | Jenkins Pipelines         | [`jenkins/README.md`](jenkins/README.md)            |
