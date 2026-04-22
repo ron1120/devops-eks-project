@@ -19,17 +19,19 @@ Provisioning and configuration for the **Jenkins controller** on AWS EC2 (Docker
 
 ## Run
 
-From this directory:
+**Prefer running from the `ansible/` directory** so the default inventory in [`ansible.cfg`](ansible.cfg) is used:
 
 ```bash
 cd ansible
 ansible-playbook playbooks/configure-jenkins.yml
 ```
 
-Override inventory or limit hosts if needed:
+If you run from `ansible/playbooks/`, that directory’s [`playbooks/ansible.cfg`](playbooks/ansible.cfg) points `inventory` at `../inventory.sh` (Ansible only reads `ansible.cfg` in the current working directory, not a parent).
+
+Explicit inventory (from repo root or anywhere):
 
 ```bash
-ansible-playbook -i inventory.sh playbooks/configure-jenkins.yml
+ansible-playbook -i ansible/inventory.sh ansible/playbooks/configure-jenkins.yml
 ```
 
 Dry run (no changes):

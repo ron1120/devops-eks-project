@@ -99,9 +99,19 @@ resource "aws_security_group" "ec2_sg" {
   }
 
   ingress {
-    description = "App on port 8080"
+    description = "App on port 8080 (also used by the Prometheus Jenkins plugin at /prometheus)"
     from_port   = 8080
     to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # node_exporter — scraped by Prometheus on EKS via the Jenkins EIP.
+  # Lab posture: open to the world. Tighten to your office/NAT CIDR in production.
+  ingress {
+    description = "node_exporter metrics (Prometheus scrape target)"
+    from_port   = 9100
+    to_port     = 9100
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }

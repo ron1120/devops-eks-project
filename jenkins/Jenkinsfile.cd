@@ -192,5 +192,48 @@ EOF
             }
             cleanWs()
         }
+        failure {
+            echo "❌ CD failed for commit ${env.GIT_COMMIT_SHORT ?: 'N/A'} (build #${env.BUILD_NUMBER})"
+            script { notifySlackFailure('CD') }
+        }
+        unstable {
+            echo "⚠️ CD unstable for commit ${env.GIT_COMMIT_SHORT ?: 'N/A'} (build #${env.BUILD_NUMBER})"
+            script { notifySlackFailure('CD', ':warning:', 'UNSTABLE') }
+        }
+    }
+}
+
+// Post a failure/unstable notification to Slack via an Incoming Webhook.
+// The webhook URL is read from AWS Secrets Manager (secret id: SlackWebhookUrl).
+// The secret value may be a raw https:// URL or JSON like {"url": "..."} / {"webhook_url": "..."}.
+// If the secret is missing or the call fails, the pipeline result is preserved (soft-fail).
+def notifySlackFailure(String pipelineLabel, String emoji = ':x:', String tag = 'FAILED') {
+    try {
+        def payload = groovy.json.JsonOutput.toJson([
+            text: "${emoji} *${pipelineLabel}* — job `${env.JOB_NAME}` #${env.BUILD_NUMBER} ${tag}\n" +
+                  "Commit: `${env.GIT_COMMIT_SHORT ?: 'N/A'}`  Cluster: `${env.EKS_CLUSTER_NAME ?: 'N/A'}`  Namespace: `${env.APP_NAMESPACE ?: 'N/A'}`\n" +
+                  "Deploy applied: ${env.DO_DEPLOY == '1' ? 'yes' : 'no'}  Result: ${currentBuild.currentResult}  Duration: ${currentBuild.durationString}\n" +
+                  "<${env.BUILD_URL}|Open Jenkins build>"
+        ])
+        writeFile file: '.slack-payload.json', text: payload
+        sh """
+            set +x
+            WEBHOOK=\$(aws secretsmanager get-secret-value --secret-id SlackWebhookUrl --region ${env.AWS_REGION} --query SecretString --output text 2>/dev/null || true)
+            URL=""
+            if [ -n "\$WEBHOOK" ]; then
+                case "\$WEBHOOK" in
+                    https://*) URL="\$WEBHOOK" ;;
+                    *) URL=\$(echo "\$WEBHOOK" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('url') or d.get('webhook_url') or '')" 2>/dev/null || echo "") ;;
+                esac
+            fi
+            if [ -n "\$URL" ]; then
+                curl -sS -X POST -H 'Content-Type: application/json' --data @.slack-payload.json "\$URL" >/dev/null || true
+                echo "[slack] failure notification sent"
+            else
+                echo "[slack] secret SlackWebhookUrl not found or empty — skipping notification"
+            fi
+        """
+    } catch (err) {
+        echo "WARN: Slack notification failed (${err.message}) — continuing"
     }
 }

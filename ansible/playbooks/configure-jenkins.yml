@@ -45,13 +45,14 @@
         update_cache: true
         upgrade: dist
 
-    # ── Python Installation ──
-    - name: Install Python and dependencies
+    # ── Python + AWS CLI (host) — pipelines run in the Jenkins container (AWS CLI there is installed below) ──
+    - name: Install Python, pip, and AWS CLI on host
       apt:
         name:
           - python3
           - python3-venv
           - python3-pip
+          - awscli
         state: present
 
     # ── Docker Prerequisites ──
@@ -122,6 +123,7 @@
         workflow-aggregator git github docker-workflow
         credentials credentials-binding junit timestamper
         pipeline-stage-view ws-cleanup
+        prometheus
       changed_when: true
 
     # ── Jenkins Container Dependencies ──

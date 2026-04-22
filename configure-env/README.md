@@ -18,20 +18,27 @@ cp .env.example .env
 | `AWS_DOCKERHUB_SECRET_ID` | Secrets Manager secret name for Docker Hub (e.g. `DockerHubCredentials`). |
 | `GIT_USERNAME` / `GIT_API_TOKEN` | GitHub user and PAT for Jenkins **Tag Release** (`jenkins/Jenkinsfile.cli`); pushed by `export-env.sh`. |
 | `AWS_GIT_SECRET_ID` | Secrets Manager secret name for GitHub (e.g. `RonGitUser`). |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional. Documented for local use; Jenkins CD normally uses the EC2 instance profile instead. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional. If unset, the AWS CLI uses your usual provider chain (`~/.aws/credentials`, `AWS_PROFILE`, SSO, etc.). You can set these in `.env` or only on your shell. |
+| `AWS_PROFILE` | Optional, when you are not using static keys. |
 
 ## Sync secrets to AWS
 
-Run from this directory (requires AWS CLI with permission to update the secrets):
+[`export-env.sh`](export-env.sh) loads `.env` and calls `put-secret-value` for Docker Hub and GitHub. Your AWS identity must be allowed to update those secrets (same as running the `aws` commands yourself).
 
 ```bash
+cd configure-env
 ./export-env.sh
 ```
 
-This reads `.env` and runs `aws secretsmanager put-secret-value` for:
+If `aws` fails, fix credentials outside this script (e.g. `aws configure`, valid keys, or `aws sso login`).
 
-- `AWS_DOCKERHUB_SECRET_ID` — JSON `username` / `password` from Docker Hub vars.
-- `AWS_GIT_SECRET_ID` — JSON `username` / `password` from Git GitHub vars (`GIT_API_TOKEN` is the password field).
+### `InvalidSignatureException` / “signature we calculated does not match”
+
+That error is from **bad signing credentials**, not from `export-env.sh`. Fix one of these:
+
+1. **Use a current IAM key pair** — In IAM, create a new access key, copy both values once, put them in `.env` (or only in `~/.aws/credentials` via `aws configure`).
+2. **Bash and `.env`** — If `AWS_SECRET_ACCESS_KEY` (or the access key) contains characters like `$`, `` ` ``, or `!`, unquoted `source` can corrupt the value. Use **single quotes** around the value, e.g. `AWS_SECRET_ACCESS_KEY='wJalr...'`.
+3. **Stop duplicating keys** — Delete `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from `.env` and rely on a profile that already works: run `aws sts get-caller-identity` successfully, then run `./export-env.sh` again (same shell picks up `~/.aws`).
 
 ## Ansible
 

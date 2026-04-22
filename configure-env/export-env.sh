@@ -10,8 +10,11 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 set -a
+# shellcheck source=/dev/null
 source "$ENV_FILE"
 set +a
+
+export AWS_PAGER=
 
 # Docker Hub
 aws secretsmanager put-secret-value \
@@ -28,3 +31,21 @@ aws secretsmanager put-secret-value \
   --secret-string "{\"username\":\"${GIT_USERNAME}\",\"password\":\"${GIT_API_TOKEN}\"}"
 
 echo "Updated secret: $AWS_GIT_SECRET_ID"
+
+# Slack Incoming Webhook (used by Jenkinsfile.* post.failure notifications).
+# Create the secret on first run, otherwise update the existing value.
+if aws secretsmanager describe-secret \
+     --secret-id "$AWS_SLACK_SECRET_ID" \
+     --region "$AWS_REGION" >/dev/null 2>&1; then
+  aws secretsmanager put-secret-value \
+    --secret-id "$AWS_SLACK_SECRET_ID" \
+    --region "$AWS_REGION" \
+    --secret-string "$SLACK_WEBHOOK_URL"
+else
+  aws secretsmanager create-secret \
+    --name "$AWS_SLACK_SECRET_ID" \
+    --region "$AWS_REGION" \
+    --secret-string "$SLACK_WEBHOOK_URL" >/dev/null
+fi
+
+echo "Updated secret: $AWS_SLACK_SECRET_ID"

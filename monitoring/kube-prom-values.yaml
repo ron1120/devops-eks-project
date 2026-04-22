@@ -1,0 +1,48 @@
+# kube-prometheus-stack values for the devops-eks-cluster.
+# Install / upgrade:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   helm upgrade --install kube-prom prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace \
+#     -f monitoring/kube-prom-values.yaml
+#
+# The chart deploys Prometheus, Alertmanager, Grafana, node-exporter, and kube-state-metrics.
+
+prometheus:
+  prometheusSpec:
+    retention: 10d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp2
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+
+grafana:
+  adminPassword: "admin"            # change after first login via the UI
+  defaultDashboardsTimezone: browser
+  service:
+    type: LoadBalancer              # exposes Grafana via an AWS ELB
+    port: 80
+  persistence:
+    enabled: true
+    storageClassName: gp2
+    size: 5Gi
+  sidecar:
+    dashboards:
+      enabled: true
+    datasources:
+      enabled: true
+
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp2
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
