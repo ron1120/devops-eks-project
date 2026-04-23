@@ -286,19 +286,19 @@
           job.setDefinition(new CpsScmFlowDefinition(scm, "{{ jenkins_cli_ci_jenkinsfile }}"))
 
           def triggers = []
-          triggers.add(new SCMTrigger("H/5 * * * *"))
           try {
               def pushTriggerClass = Class.forName("com.cloudbees.jenkins.GitHubPushTrigger")
               triggers.add(pushTriggerClass.getDeclaredConstructor().newInstance())
+              println("[Jenkins Init] GitHubPushTrigger enabled for '${jobName}'")
           } catch (Throwable t) {
-              println("[Jenkins Init] GitHubPushTrigger not available, using SCM polling only: " + t.message)
+              println("[Jenkins Init] GitHubPushTrigger not available: " + t.message)
           }
 
           job.removeProperty(PipelineTriggersJobProperty)
           job.addProperty(new PipelineTriggersJobProperty(triggers))
 
           job.save()
-          println("[Jenkins Init] Pipeline job '${jobName}' configured (SCM + included region ^cli/.*)")
+          println("[Jenkins Init] Pipeline job '${jobName}' configured (GitHub webhook + included region ^cli/.*)")
 
     - name: Deploy engine-ci pipeline job (SCM + engine/ path filter)
       copy:
@@ -347,19 +347,19 @@
           job.setDefinition(new CpsScmFlowDefinition(scm, "{{ jenkins_engine_ci_jenkinsfile }}"))
 
           def triggers = []
-          triggers.add(new SCMTrigger("H/5 * * * *"))
           try {
               def pushTriggerClass = Class.forName("com.cloudbees.jenkins.GitHubPushTrigger")
               triggers.add(pushTriggerClass.getDeclaredConstructor().newInstance())
+              println("[Jenkins Init] GitHubPushTrigger enabled for '${jobName}'")
           } catch (Throwable t) {
-              println("[Jenkins Init] GitHubPushTrigger not available, using SCM polling only: " + t.message)
+              println("[Jenkins Init] GitHubPushTrigger not available: " + t.message)
           }
 
           job.removeProperty(PipelineTriggersJobProperty)
           job.addProperty(new PipelineTriggersJobProperty(triggers))
 
           job.save()
-          println("[Jenkins Init] Pipeline job '${jobName}' configured (SCM + included region ^engine/.*)")
+          println("[Jenkins Init] Pipeline job '${jobName}' configured (GitHub webhook + included region ^engine/.*)")
 
     - name: Deploy cd pipeline job (manual trigger)
       copy:
