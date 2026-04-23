@@ -134,10 +134,20 @@
 
     - name: Print access info
       ansible.builtin.debug:
-        msg:
-          - "Cluster:         {{ eks_cluster_name }} ({{ aws_region }})"
-          - "App namespace:   {{ app_namespace }}"
-          - "Grafana URL:     http://{{ grafana_host.stdout | default('<pending — rerun in 2m>') }}/"
-          - "Grafana user:    admin"
-          - "Grafana pass:    {{ grafana_pass.stdout | default('admin') }}"
+        msg: |
+
+          ==============================================
+            EKS Cluster Ready: {{ eks_cluster_name }}
+          ==============================================
+
+            App namespace:   {{ app_namespace }}
+
+            Grafana URL:     http://{{ grafana_host.stdout | default('<pending>') }}/
+            Grafana user:    admin
+            Grafana pass:    {{ grafana_pass.stdout | default('admin') }}
+
+            Prometheus:      kubectl -n {{ monitoring_namespace }} port-forward svc/kube-prom-kube-prometheus-prometheus 9090:9090
+            Alertmanager:    kubectl -n {{ monitoring_namespace }} port-forward svc/kube-prom-kube-prometheus-alertmanager 9093:9093
+
+          ==============================================
       tags: [always]
