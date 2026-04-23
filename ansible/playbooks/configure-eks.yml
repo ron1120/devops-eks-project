@@ -1,0 +1,143 @@
+---
+# Configure a freshly applied `devops-eks-cluster`:
+#   1. refresh kubeconfig
+#   2. install the observability stack (kube-prometheus-stack + loki)
+#   3. deploy the sawe workloads (StatefulSet + Deployment) from k8s/base
+#   4. wait for rollouts and print the Grafana URL + admin password
+#
+# Runs on your laptop — no SSH target. Needs `aws`, `kubectl`, and `helm` on PATH.
+#
+# Run:
+#   cd ansible
+#   ansible-playbook playbooks/configure-eks.yml
+#
+# Skip monitoring (faster re-runs):
+#   ansible-playbook playbooks/configure-eks.yml --skip-tags monitoring
+- name: Configure the devops-eks-cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    aws_region: "us-east-1"
+    eks_cluster_name: "devops-eks-cluster"
+    app_namespace: "seyoawe"
+    monitoring_namespace: "monitoring"
+    repo_root: "{{ playbook_dir }}/../.."
+    k8s_base_dir: "{{ repo_root }}/k8s/overlays/cd"
+    kube_prom_values: "{{ repo_root }}/monitoring/kube-prom-values.yaml"
+    loki_values: "{{ repo_root }}/monitoring/loki-values.yaml"
+    rollout_timeout: "5m"
+
+  tasks:
+    # ── Preflight ──
+    - name: Verify required CLIs are installed
+      ansible.builtin.command: "{{ item }}"
+      loop:
+        - "aws --version"
+        - "kubectl version --client"
+        - "helm version"
+      changed_when: false
+      tags: [always]
+
+    # ── Kubeconfig ──
+    - name: Update kubeconfig for {{ eks_cluster_name }}
+      ansible.builtin.command: >
+        aws eks update-kubeconfig
+        --name {{ eks_cluster_name }}
+        --region {{ aws_region }}
+      changed_when: true
+      tags: [kubeconfig]
+
+    - name: Wait for worker nodes to be Ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready nodes --all --timeout={{ rollout_timeout }}
+      changed_when: false
+      tags: [kubeconfig]
+
+    # ── Monitoring (Prometheus + Grafana + Alertmanager) ──
+    - name: Add prometheus-community Helm repo
+      ansible.builtin.command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      register: repo_prom
+      changed_when: "'has been added' in repo_prom.stdout"
+      failed_when: repo_prom.rc != 0 and 'already exists' not in repo_prom.stderr
+      tags: [monitoring]
+
+    - name: Add grafana Helm repo
+      ansible.builtin.command: helm repo add grafana https://grafana.github.io/helm-charts
+      register: repo_grafana
+      changed_when: "'has been added' in repo_grafana.stdout"
+      failed_when: repo_grafana.rc != 0 and 'already exists' not in repo_grafana.stderr
+      tags: [monitoring]
+
+    - name: Update Helm repos
+      ansible.builtin.command: helm repo update
+      changed_when: false
+      tags: [monitoring]
+
+    - name: Install/upgrade kube-prometheus-stack
+      ansible.builtin.command: >
+        helm upgrade --install kube-prom prometheus-community/kube-prometheus-stack
+        -n {{ monitoring_namespace }} --create-namespace
+        -f {{ kube_prom_values }}
+      changed_when: true
+      tags: [monitoring]
+
+    - name: Install/upgrade Loki + Promtail
+      ansible.builtin.command: >
+        helm upgrade --install loki grafana/loki-stack
+        -n {{ monitoring_namespace }} --create-namespace
+        -f {{ loki_values }}
+      changed_when: true
+      tags: [monitoring]
+
+    # ── App workloads (sawe-engine StatefulSet + sawe-cli Deployment) ──
+    - name: Apply Kubernetes manifests (kustomize overlay with ECR images)
+      ansible.builtin.command: "kubectl apply -k {{ k8s_base_dir }}"
+      changed_when: true
+      tags: [app]
+
+    - name: Wait for sawe-engine StatefulSet rollout
+      ansible.builtin.command: >
+        kubectl -n {{ app_namespace }} rollout status statefulset/sawe-engine --timeout={{ rollout_timeout }}
+      changed_when: false
+      tags: [app]
+
+    - name: Wait for sawe-cli Deployment rollout
+      ansible.builtin.command: >
+        kubectl -n {{ app_namespace }} rollout status deployment/sawe-cli --timeout={{ rollout_timeout }}
+      changed_when: false
+      tags: [app]
+
+    # ── Output: Grafana URL and admin password ──
+    - name: Get Grafana LoadBalancer hostname
+      ansible.builtin.shell: |
+        set -e
+        for i in $(seq 1 40); do
+          HOST=$(kubectl -n {{ monitoring_namespace }} get svc kube-prom-grafana \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+          if [ -n "$HOST" ]; then echo "$HOST"; exit 0; fi
+          sleep 5
+        done
+        echo ""
+      register: grafana_host
+      changed_when: false
+      tags: [monitoring, output]
+
+    - name: Get Grafana admin password
+      ansible.builtin.shell: |
+        kubectl -n {{ monitoring_namespace }} get secret kube-prom-grafana \
+          -o jsonpath='{.data.admin-password}' | base64 -d
+      register: grafana_pass
+      changed_when: false
+      tags: [monitoring, output]
+
+    - name: Print access info
+      ansible.builtin.debug:
+        msg:
+          - "Cluster:         {{ eks_cluster_name }} ({{ aws_region }})"
+          - "App namespace:   {{ app_namespace }}"
+          - "Grafana URL:     http://{{ grafana_host.stdout | default('<pending — rerun in 2m>') }}/"
+          - "Grafana user:    admin"
+          - "Grafana pass:    {{ grafana_pass.stdout | default('admin') }}"
+      tags: [always]

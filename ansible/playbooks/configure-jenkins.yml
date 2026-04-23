@@ -46,14 +46,55 @@
         upgrade: dist
 
     # ── Python + AWS CLI (host) — pipelines run in the Jenkins container (AWS CLI there is installed below) ──
-    - name: Install Python, pip, and AWS CLI on host
+    # Ubuntu 24.04 (Noble) dropped the legacy `awscli` (v1) apt package, so install AWS CLI v2 from the
+    # official installer. Python/pip still come from apt for venv use by the pipelines.
+    - name: Install Python and pip on host
       apt:
         name:
           - python3
           - python3-venv
           - python3-pip
-          - awscli
+          - unzip
+          - curl
         state: present
+
+    - name: Detect AWS CLI v2 installer arch for host
+      ansible.builtin.set_fact:
+        awscli_host_arch: "{{ 'aarch64' if ansible_architecture in ['aarch64', 'arm64'] else 'x86_64' }}"
+
+    - name: Check if AWS CLI is already installed on host
+      ansible.builtin.stat:
+        path: /usr/local/bin/aws
+      register: host_aws_bin
+
+    - name: Download AWS CLI v2 installer on host
+      ansible.builtin.get_url:
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ awscli_host_arch }}.zip"
+        dest: /tmp/awscliv2.zip
+        mode: "0644"
+      when: not host_aws_bin.stat.exists
+
+    - name: Unpack AWS CLI v2 installer on host
+      ansible.builtin.unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp/
+        remote_src: true
+      when: not host_aws_bin.stat.exists
+
+    - name: Install AWS CLI v2 on host
+      ansible.builtin.command: /tmp/aws/install
+      args:
+        creates: /usr/local/bin/aws
+      when: not host_aws_bin.stat.exists
+
+    - name: Clean up AWS CLI v2 installer on host
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/awscliv2.zip
+        - /tmp/aws
+      when: not host_aws_bin.stat.exists
 
     # ── Docker Prerequisites ──
     - name: Install Docker prerequisites

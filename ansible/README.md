@@ -1,6 +1,6 @@
 # Ansible
 
-Provisioning and configuration for the **Jenkins controller** on AWS EC2 (Docker-based). One playbook; dynamic inventory driven by `configure-env/.env`.
+Provisioning and configuration for **Jenkins** (remote EC2) and the **EKS cluster** (local `kubectl`/`helm`/`aws` against the API). Dynamic inventory driven by `configure-env/.env`.
 
 ---
 
@@ -12,6 +12,7 @@ Provisioning and configuration for the **Jenkins controller** on AWS EC2 (Docker
 | [`inventory.sh`](inventory.sh)                                            | Dynamic JSON inventory; reads `JENKINS_EIP` from [`../configure-env/.env`](../configure-env/.env).                                   |
 | [`inventory.ini`](inventory.ini)                                          | Static fallback (replace `{{ JENKINS_EIP }}` manually).                                                                              |
 | [`playbooks/configure-jenkins.yml`](playbooks/configure-jenkins.yml)      | Installs Docker, runs `jenkins/jenkins:lts-jdk21`, plugins, AWS CLI in container, Groovy init for `cli-ci`, `engine-ci`, `cd` jobs. |
+| [`playbooks/configure-eks.yml`](playbooks/configure-eks.yml)              | Refreshes kubeconfig, installs `kube-prometheus-stack` + `loki-stack`, applies `k8s/base` manifests, waits for rollouts. Runs on localhost. |
 
 ---
 
@@ -29,13 +30,21 @@ From the `ansible/` directory (recommended):
 
 ```bash
 cd ansible
+
+# Provision / update Jenkins (remote EC2 via SSH)
 ansible-playbook playbooks/configure-jenkins.yml
+
+# Configure a freshly applied EKS cluster (runs locally against the EKS API)
+ansible-playbook playbooks/configure-eks.yml
+#   skip monitoring for a quick redeploy:  --skip-tags monitoring
+#   redeploy only the app:                 --tags app
 ```
 
 Explicit inventory (from anywhere):
 
 ```bash
 ansible-playbook -i ansible/inventory.sh ansible/playbooks/configure-jenkins.yml
+ansible-playbook -i ansible/inventory.sh ansible/playbooks/configure-eks.yml
 ```
 
 Dry run:

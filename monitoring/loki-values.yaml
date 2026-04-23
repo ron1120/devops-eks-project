@@ -1,0 +1,37 @@
+# Loki + Promtail values for lightweight pod log aggregation on EKS.
+#
+# Install / upgrade:
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm repo update
+#   helm upgrade --install loki grafana/loki-stack \
+#     -n monitoring --create-namespace \
+#     -f monitoring/loki-values.yaml
+#
+# Wire Grafana to Loki: Connections → Data sources → Add Loki
+#   URL: http://loki:3100
+# Then Explore → pick data source "Loki" → try:  {namespace="sawe"}
+
+loki:
+  enabled: true
+  persistence:
+    enabled: true
+    storageClassName: gp2
+    size: 10Gi
+  config:
+    # Default chart config is fine; override retention here if desired.
+    table_manager:
+      retention_deletes_enabled: true
+      retention_period: 168h   # 7 days
+
+# Promtail runs as a DaemonSet on every node and ships /var/log/pods to Loki.
+promtail:
+  enabled: true
+
+# We already get node-exporter & Grafana from kube-prometheus-stack, so the
+# loki-stack bundled copies stay off.
+grafana:
+  enabled: false
+prometheus:
+  enabled: false
+fluent-bit:
+  enabled: false
