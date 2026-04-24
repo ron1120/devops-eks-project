@@ -37,6 +37,23 @@ The script loads `.env` and calls `aws secretsmanager put-secret-value` for each
 
 ---
 
+## Safe EKS teardown
+
+```bash
+configure-env/destroy-eks.sh
+```
+
+`terraform destroy` on the EKS stack fails with `DependencyViolation` if Kubernetes-created AWS resources (LoadBalancer ELBs, auto security groups, EBS PVCs) still exist, because Terraform doesn't track them. This script cleans them up first, then runs `terraform destroy`:
+
+1. `aws eks update-kubeconfig` (skipped if the cluster is already gone).
+2. `helm uninstall kube-prom loki` and `kubectl delete ns monitoring` (drops PVCs → EBS).
+3. Deletes any remaining classic/v2 LoadBalancers and their auto `k8s-elb-*` security groups in the EKS VPC (matched by `Name=devops-eks-project-eks-vpc`).
+4. `terraform -chdir=terraform/devops-eks-cluster destroy -auto-approve`.
+
+Override defaults via `.env` or env vars: `AWS_REGION`, `EKS_CLUSTER_NAME`, `VPC_NAME_TAG`.
+
+---
+
 ## Troubleshooting
 
 **`InvalidSignatureException` / "signature we calculated does not match"** — bad signing credentials, not the script.
